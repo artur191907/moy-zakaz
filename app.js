@@ -1,88 +1,59 @@
 /* =========================================================================
-   «Мой заказ» — Telegram Mini App.
-   Управление повседневными делами по логике официантского приложения iiko:
-   столы → категории, блюда → задачи, заказ → список дел на контекст.
-
-   Архитектура (чистый ES6+, без фреймворков):
-     1. tg          — обёртка над Telegram.WebApp (тема, кнопки, хаптика)
-     2. DB          — состояние приложения + сохранение в localStorage
-     3. nav         — стек экранов (для корректной работы кнопки «Назад»)
-     4. render*     — функции отрисовки экранов
-     5. модалки     — модификаторы, категория, задача, настройки
+   «Мой заказ» — официантская система для суши-бистро (Telegram Mini App).
+   Логика в духе iiko:
+     • Столы — реальные столы зала, их можно переставлять в нужном порядке.
+     • Меню — общее меню заведения (роллы, суши, сеты, горячее, напитки…).
+     • Под каждым столом — свой «открытый счёт» (заказ), который сохраняется.
+     • Закрытие стола переносит заказ в историю и освобождает стол.
+   Чистый ES6+, без фреймворков. Комментарии на русском.
    ========================================================================= */
 
 'use strict';
 
-/* ----------------------------------------------------------------------- */
-/* 0. МЕЛКИЕ УТИЛИТЫ                                                        */
-/* ----------------------------------------------------------------------- */
-
-// Короткий querySelector
+/* ----------------------------- УТИЛИТЫ ----------------------------- */
 const $  = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-
-// Генерация уникального идентификатора
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-
-// Экранирование пользовательского текста (защита от вставки HTML)
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
 ));
 
-/* ----------------------------------------------------------------------- */
-/* 1. TELEGRAM WEBAPP                                                       */
-/* ----------------------------------------------------------------------- */
+// Доступные цвета столов
+const COLORS = ['c1','c2','c3','c4','c5','c6','c7','c8'];
+// Набор модификаторов блюда (как модификаторы в iiko)
+const MODIFIERS = ['Без васаби', 'Без имбиря', 'Острее', 'С собой'];
 
-// Реальный объект внутри Telegram; в обычном браузере его нет — работаем без него.
+/* --------------------------- TELEGRAM WEBAPP --------------------------- */
 const TG = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 
 const tg = {
   api: TG,
-  // Внутри Telegram, если доступны методы инициализации
-  inside: !!(TG && TG.initData !== undefined && TG.platform && TG.platform !== 'unknown'),
-
   init() {
     if (!TG) return;
     try { TG.ready(); } catch (e) {}
-    try { TG.expand(); } catch (e) {}            // развернуть на весь экран
+    try { TG.expand(); } catch (e) {}
     try { TG.disableVerticalSwipes && TG.disableVerticalSwipes(); } catch (e) {}
     this.applyTheme();
-    // Реагируем на смену темы пользователем «на лету»
     TG.onEvent && TG.onEvent('themeChanged', () => this.applyTheme());
   },
-
-  // Переносим themeParams Telegram в CSS-переменные интерфейса
   applyTheme() {
     if (!TG || !TG.themeParams) return;
     const p = TG.themeParams;
     const root = document.documentElement.style;
-    const set = (cssVar, value) => { if (value) root.setProperty(cssVar, value); };
-
-    set('--bg',           p.bg_color);
-    set('--text',         p.text_color);
-    set('--hint',         p.hint_color || p.subtitle_text_color);
-    set('--link',         p.link_color || p.accent_text_color);
-    set('--button',       p.button_color);
-    set('--button-text',  p.button_text_color);
+    const set = (v, val) => { if (val) root.setProperty(v, val); };
+    set('--bg', p.bg_color);
+    set('--text', p.text_color);
+    set('--hint', p.hint_color || p.subtitle_text_color);
+    set('--link', p.link_color || p.accent_text_color);
+    set('--button', p.button_color);
+    set('--button-text', p.button_text_color);
     set('--secondary-bg', p.secondary_bg_color || p.section_bg_color);
-    set('--section-bg',   p.section_bg_color || p.bg_color);
-    set('--header-bg',    p.header_bg_color || p.button_color);
-    set('--destructive',  p.destructive_text_color);
-
+    set('--section-bg', p.section_bg_color || p.bg_color);
+    set('--header-bg', p.header_bg_color || p.button_color);
+    set('--destructive', p.destructive_text_color);
     document.body.style.background = p.secondary_bg_color || p.bg_color || '';
   },
-
-  // Цвет шапки WebApp под текущий раздел
-  setHeaderColor(color) {
-    if (!TG || !TG.setHeaderColor) return;
-    try {
-      // Telegram принимает 'bg_color' / 'secondary_bg_color' либо HEX (Bot API 6.9+)
-      if (/^#/.test(color)) TG.setHeaderColor(color);
-      else TG.setHeaderColor(color);
-    } catch (e) {}
-  },
-
-  // --- MainButton: подтверждение заказа ---
+  setHeaderColor(color) { if (TG && TG.setHeaderColor) { try { TG.setHeaderColor(color); } catch (e) {} } },
   mainButton(text, onClick) {
     if (!TG || !TG.MainButton) return;
     const mb = TG.MainButton;
@@ -93,225 +64,177 @@ const tg = {
     mb.show();
   },
   hideMainButton() { if (TG && TG.MainButton) TG.MainButton.hide(); },
-
-  // --- BackButton: возврат на предыдущий экран ---
-  showBackButton() {
-    if (!TG || !TG.BackButton) return;
-    TG.BackButton.show();
-  },
+  showBackButton() { if (TG && TG.BackButton) TG.BackButton.show(); },
   hideBackButton() { if (TG && TG.BackButton) TG.BackButton.hide(); },
   onBack(fn) { if (TG && TG.BackButton) TG.BackButton.onClick(fn); },
-
-  // Тактильная отдача (если поддерживается)
   haptic(type = 'light') {
     if (!TG || !TG.HapticFeedback) return;
     try {
-      if (type === 'success' || type === 'error' || type === 'warning')
-        TG.HapticFeedback.notificationOccurred(type);
-      else
-        TG.HapticFeedback.impactOccurred(type);
+      if (['success','error','warning'].includes(type)) TG.HapticFeedback.notificationOccurred(type);
+      else TG.HapticFeedback.impactOccurred(type);
     } catch (e) {}
   },
-
-  // Диалог подтверждения (нативный в Telegram, иначе системный confirm)
   confirm(message, cb) {
-    if (TG && TG.showConfirm) { TG.showConfirm(message, (ok) => cb(ok)); }
-    else { cb(window.confirm(message)); }
+    if (TG && TG.showConfirm) TG.showConfirm(message, (ok) => cb(ok));
+    else cb(window.confirm(message));
   },
 };
 
-/* ----------------------------------------------------------------------- */
-/* 2. ДАННЫЕ + ХРАНИЛИЩЕ                                                    */
-/* ----------------------------------------------------------------------- */
+/* ----------------------------- ДАННЫЕ ----------------------------- */
+const STORE_KEY = 'myorder_db_v2';   // v2 — ресторанная модель
 
-const STORE_KEY = 'myorder_db_v1';
-
-// Структура заранее готова к будущей отправке на сервер:
-// достаточно сериализовать DB.state и сделать POST.
 const DB = {
   state: null,
 
   load() {
     try {
       const raw = localStorage.getItem(STORE_KEY);
-      if (raw) { this.state = JSON.parse(raw); return; }
-    } catch (e) { /* повреждённые данные — пересоздаём */ }
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (data && data.version === 2) { this.state = data; return; }
+      }
+    } catch (e) {}
     this.state = this.seed();
     this.save();
   },
-
   save() {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(this.state)); }
     catch (e) { toast('Не удалось сохранить — нет места в хранилище'); }
   },
-
-  // Полный сброс к стандартному набору
   reset() { this.state = this.seed(); this.save(); },
 
-  // Заводские данные: версия, настройки, категории с меню, пустые корзина/история
+  // Заводские данные: меню суши-бистро + столы
   seed() {
-    return {
-      version: 1,
-      settings: { unit: 'time' },                // 'time' (минуты) | 'points' (баллы)
-      cart: { categoryId: null, items: [] },     // текущий заказ
-      history: [],                               // завершённые заказы
-      categories: [
-        cat('Утро', '🌅', 'c1', [
-          sec('Быстрое', [
-            dish('💧', 'Выпить воды', 2),
-            dish('🤸', 'Зарядка', 10),
-            dish('🚿', 'Душ', 10),
-          ]),
-          sec('Важное', [
-            dish('🍳', 'Завтрак', 20),
-            dish('📝', 'План на день', 10),
-          ]),
-        ]),
-        cat('Работа', '💼', 'c2', [
-          sec('Быстрые дела', [
-            dish('📧', 'Разобрать почту', 15),
-            dish('☎️', 'Созвон', 30),
-          ]),
-          sec('Важные дела', [
-            dish('🎯', 'Главная задача', 90),
-            dish('📊', 'Отчёт', 60),
-          ]),
-        ]),
-        cat('Дом', '🏠', 'c3', [
-          sec('Быстрое', [
-            dish('🍽️', 'Помыть посуду', 15),
-            dish('🪴', 'Полить цветы', 5),
-          ]),
-          sec('Уборка', [
-            dish('🧹', 'Пропылесосить', 30),
-            dish('🧺', 'Постирать', 20),
-          ]),
-        ]),
-        cat('Спорт', '🏋️', 'c4', [
-          sec('Разминка', [ dish('🤸', 'Растяжка', 10) ]),
-          sec('Тренировка', [
-            dish('🏃', 'Кардио', 30),
-            dish('💪', 'Силовая', 45),
-          ]),
-        ]),
-        cat('Покупки', '🛒', 'c5', [
-          sec('Продукты', [
-            dish('🥛', 'Молоко', 1),
-            dish('🍞', 'Хлеб', 1),
-            dish('🥦', 'Овощи', 1),
-          ]),
-          sec('Бытовое', [ dish('🧴', 'Бытовая химия', 1) ]),
-        ]),
-        cat('Учёба', '📚', 'c6', [
-          sec('Быстрое', [ dish('📖', 'Повторить конспект', 20) ]),
-          sec('Основное', [
-            dish('🎓', 'Лекция', 90),
-            dish('✍️', 'Домашка', 60),
-          ]),
-        ]),
-      ],
-    };
+    // Фабрики
+    const dish = (emoji, name, price) => ({ id: uid(), emoji, name, price });
+    const sec  = (name, items) => ({ id: uid(), name, items });
+    const tbl  = (name, emoji, color) => ({ id: uid(), name, emoji, color, order: [] });
 
-    // Локальные фабрики для краткости
-    function cat(name, emoji, color, sections) {
-      return { id: uid(), name, emoji, color, sections };
-    }
-    function sec(name, items) { return { id: uid(), name, items }; }
-    function dish(emoji, name, cost) { return { id: uid(), emoji, name, cost }; }
+    return {
+      version: 2,
+      settings: { currency: '₽' },
+      // ОБЩЕЕ МЕНЮ ЗАВЕДЕНИЯ. Цены — реалистичные московские, легко правятся в приложении.
+      menu: {
+        sections: [
+          sec('Сеты', [
+            dish('🍱', 'Сет «Филадельфия»', 1290),
+            dish('🍱', 'Сет «Токио»', 1690),
+            dish('🍱', 'Сет «Запечённый»', 1590),
+            dish('🍱', 'Сет «Большой»', 2490),
+          ]),
+          sec('Роллы классические', [
+            dish('🍣', 'Филадельфия', 520),
+            dish('🍣', 'Калифорния', 480),
+            dish('🍣', 'Канада с угрём', 560),
+            dish('🌶️', 'Спайси лосось', 440),
+            dish('🥑', 'Овощной', 320),
+            dish('🍣', 'Унаги маки', 390),
+          ]),
+          sec('Запечённые роллы', [
+            dish('🔥', 'Запечённый с лососем', 460),
+            dish('🔥', 'Запечённый с угрём', 540),
+            dish('🔥', 'Запечённый краб', 420),
+          ]),
+          sec('Суши и нигири', [
+            dish('🍣', 'Нигири лосось', 150),
+            dish('🍣', 'Нигири угорь', 220),
+            dish('🍣', 'Нигири тунец', 190),
+            dish('🍤', 'Нигири креветка', 170),
+            dish('🌶️', 'Гункан спайси', 180),
+          ]),
+          sec('Горячее', [
+            dish('🍜', 'Лапша вок с курицей', 420),
+            dish('🍚', 'Рис вок с морепродуктами', 490),
+            dish('🍛', 'Кацу-карри с курицей', 520),
+            dish('🍤', 'Темпура из креветок', 480),
+          ]),
+          sec('Супы', [
+            dish('🍲', 'Том ям с креветками', 540),
+            dish('🍲', 'Мисо-суп', 250),
+            dish('🍜', 'Рамен', 520),
+          ]),
+          sec('Салаты и закуски', [
+            dish('🥗', 'Салат чука', 290),
+            dish('🥗', 'Поке с тунцом', 520),
+            dish('🫛', 'Эдамаме', 290),
+            dish('🥟', 'Гёдза с курицей', 360),
+          ]),
+          sec('Напитки', [
+            dish('🍵', 'Зелёный чай', 250),
+            dish('🥤', 'Кола', 180),
+            dish('🍋', 'Домашний лимонад', 290),
+            dish('🍺', 'Пиво Asahi', 450),
+          ]),
+          sec('Десерты', [
+            dish('🍡', 'Моти', 290),
+            dish('🍰', 'Чизкейк', 350),
+            dish('🍨', 'Мороженое', 250),
+          ]),
+        ],
+      },
+      // СТОЛЫ зала (можно переставлять, добавлять, удалять)
+      tables: [
+        tbl('Стол 1', '1️⃣', 'c2'),
+        tbl('Стол 2', '2️⃣', 'c2'),
+        tbl('Стол 3', '3️⃣', 'c3'),
+        tbl('Стол 4', '4️⃣', 'c3'),
+        tbl('Стол 5', '5️⃣', 'c1'),
+        tbl('Стол 6', '6️⃣', 'c1'),
+        tbl('Бар 1', '🍶', 'c5'),
+        tbl('Бар 2', '🍶', 'c5'),
+        tbl('VIP', '⭐', 'c4'),
+      ],
+      history: [],
+    };
   },
 
-  // --- Доступ к данным ---
-  getCategory(id) { return this.state.categories.find((c) => c.id === id); },
-  get unit() { return this.state.settings.unit; },
+  getTable(id) { return this.state.tables.find((t) => t.id === id); },
+  get currency() { return this.state.settings.currency || '₽'; },
 };
 
-/* ----------------------------------------------------------------------- */
-/* 3. ФОРМАТИРОВАНИЕ «ЦЕНЫ»                                                 */
-/* ----------------------------------------------------------------------- */
-
-// Перевод числа в человекочитаемую «цену» с учётом единицы измерения
-function formatCost(value) {
-  value = Math.round(value);
-  if (DB.unit === 'points') return `${value} ⭐`;
-  // Время в минутах → часы/минуты
-  if (value < 60) return `${value} мин`;
-  const h = Math.floor(value / 60);
-  const m = value % 60;
-  return m ? `${h} ч ${m} мин` : `${h} ч`;
+// Форматирование цены: «520 ₽»
+function formatPrice(value) {
+  return `${Math.round(value).toLocaleString('ru-RU')} ${DB.currency}`;
 }
-const unitLabel = () => (DB.unit === 'points' ? 'Баллы' : 'Время, мин');
 
-// Метки и эмодзи приоритета
-const PRIORITY = {
-  fast:   { label: 'Быстрый',  emoji: '🔥' },
-  normal: { label: 'Обычный',  emoji: '🕒' },
-  lazy:   { label: 'Не срочно', emoji: '🧘' },
-};
-
-/* ----------------------------------------------------------------------- */
-/* 4. НАВИГАЦИЯ (стек экранов)                                             */
-/* ----------------------------------------------------------------------- */
-
-// Конфигурация экранов: заголовок и то, верхнеуровневый ли это раздел
+/* ----------------------------- НАВИГАЦИЯ ----------------------------- */
 const SCREENS = {
   'tables':         { title: 'Мой заказ', top: true },
   'menu':           { title: 'Меню',      top: false },
-  'cart':           { title: 'Заказ',     top: true },
+  'order':          { title: 'Заказ',     top: false },
   'history':        { title: 'История',   top: true },
   'history-detail': { title: 'Заказ',     top: false },
 };
 
+let activeTableId = null;   // стол, с которым сейчас работаем
+let reorderMode = false;    // включён ли режим перестановки столов
+
 const nav = {
   stack: [{ screen: 'tables', params: {} }],
-
   current() { return this.stack[this.stack.length - 1]; },
+  go(screen, params = {}) { this.stack.push({ screen, params }); this.apply(); },
+  switchTop(screen) { this.stack = [{ screen, params: {} }]; this.apply(); },
+  back() { if (this.stack.length > 1) { this.stack.pop(); this.apply(); } },
 
-  // Перейти на новый экран (добавить в стек)
-  go(screen, params = {}) {
-    this.stack.push({ screen, params });
-    this.apply();
-  },
-
-  // Сбросить на верхнеуровневый раздел (для таб-бара)
-  switchTop(screen) {
-    this.stack = [{ screen, params: {} }];
-    this.apply();
-  },
-
-  // Назад
-  back() {
-    if (this.stack.length > 1) { this.stack.pop(); this.apply(); }
-  },
-
-  // Применить текущее состояние стека: показать экран, обновить кнопки/шапку
   apply() {
     const { screen, params } = this.current();
-
-    // Показ нужного экрана
     $$('.screen').forEach((s) => s.classList.toggle('is-active', s.dataset.screen === screen));
     window.scrollTo(0, 0);
 
-    // Заголовок и активная вкладка
     const cfg = SCREENS[screen];
     $('#topbarTitle').textContent = params.title || cfg.title;
     $$('.tabbar__btn').forEach((b) => b.classList.toggle('is-active', b.dataset.nav === screen));
 
-    // Кнопка «Назад» — если есть куда возвращаться
     if (this.stack.length > 1) tg.showBackButton(); else tg.hideBackButton();
-
-    // Цвет шапки: яркий на верхнем уровне, спокойный внутри
     tg.setHeaderColor(cfg.top ? 'secondary_bg_color' : 'bg_color');
 
-    // FAB «добавить»: своя роль на экранах столов и меню
+    // FAB «+»
     const addFab = $('#addFab');
-    if (screen === 'tables') { addFab.hidden = false; addFab.dataset.role = 'category'; }
-    else if (screen === 'menu') { addFab.hidden = false; addFab.dataset.role = 'task'; }
+    if (screen === 'tables' && !reorderMode) { addFab.hidden = false; addFab.dataset.role = 'table'; }
+    else if (screen === 'menu') { addFab.hidden = false; addFab.dataset.role = 'dish'; }
     else { addFab.hidden = true; }
 
-    // MainButton «Завершить заказ» — только на экране заказа и только если он не пуст
     updateMainButton();
-
-    // Отрисовка содержимого
     renderCurrent();
   },
 };
@@ -319,253 +242,212 @@ const nav = {
 function renderCurrent() {
   const { screen, params } = nav.current();
   if (screen === 'tables') renderTables();
-  else if (screen === 'menu') renderMenu(params.categoryId);
-  else if (screen === 'cart') renderCart();
+  else if (screen === 'menu') renderMenu();
+  else if (screen === 'order') renderOrder();
   else if (screen === 'history') renderHistory();
   else if (screen === 'history-detail') renderHistoryDetail(params.orderId);
 }
 
-/* ----------------------------------------------------------------------- */
-/* 5. ЭКРАН СТОЛОВ (категории)                                            */
-/* ----------------------------------------------------------------------- */
-
-function renderTables() {
-  const grid = $('#tilesGrid');
-  const colorVar = (c) => `var(--${c || 'c2'})`;
-
-  // Сколько активных задач из этой категории сейчас в заказе
-  const countFor = (catId) =>
-    DB.state.cart.categoryId === catId
-      ? DB.state.cart.items.reduce((n, it) => n + it.qty, 0)
-      : 0;
-
-  grid.innerHTML = DB.state.categories.map((c) => {
-    const n = countFor(c.id);
-    return `
-      <button class="tile" style="--tile:${colorVar(c.color)}" data-cat="${c.id}">
-        ${n ? `<span class="tile__count">${n}</span>` : ''}
-        <span class="tile__emoji">${esc(c.emoji)}</span>
-        <span class="tile__name">${esc(c.name)}</span>
-      </button>`;
-  }).join('') + `
-    <button class="tile tile--add" id="addCatTile">
-      <span class="tile__emoji">＋</span>
-      <span class="tile__name">Категория</span>
-    </button>`;
-
-  // Открытие меню категории
-  $$('.tile[data-cat]', grid).forEach((tile) => {
-    const id = tile.dataset.cat;
-    tile.addEventListener('click', () => {
-      tg.haptic('light');
-      const c = DB.getCategory(id);
-      nav.go('menu', { categoryId: id, title: `${c.emoji} ${c.name}` });
-    });
-    // Долгое нажатие / правый клик — редактирование категории
-    attachLongPress(tile, () => openCategoryModal(id));
-  });
-
-  // Плитка «добавить категорию»
-  $('#addCatTile').addEventListener('click', () => openCategoryModal(null));
+// Текущий заказ активного стола (массив строк)
+function activeOrder() {
+  const t = DB.getTable(activeTableId);
+  return t ? t.order : [];
 }
 
-/* ----------------------------------------------------------------------- */
-/* 6. ЭКРАН МЕНЮ ЗАДАЧ                                                      */
-/* ----------------------------------------------------------------------- */
+/* --------------------------- ЭКРАН СТОЛОВ --------------------------- */
+function renderTables() {
+  const grid = $('#tilesGrid');
+  $('#reorderBtn').classList.toggle('is-active', reorderMode);
+  $('#tablesLead').textContent = reorderMode
+    ? 'Двигайте столы стрелками, затем нажмите «Готово»'
+    : 'Выберите стол, чтобы открыть его заказ';
+  $('#reorderBtn').textContent = reorderMode ? '✓ Готово' : '↕ Расставить';
 
-function renderMenu(categoryId) {
-  const c = DB.getCategory(categoryId);
-  if (!c) { nav.switchTop('tables'); return; }
+  if (reorderMode) { renderReorder(grid); return; }
 
+  grid.className = 'tiles';
+  const sumOf = (t) => t.order.reduce((s, it) => s + it.price * it.qty, 0);
+  const cntOf = (t) => t.order.reduce((n, it) => n + it.qty, 0);
+
+  grid.innerHTML = DB.state.tables.map((t) => {
+    const sum = sumOf(t), cnt = cntOf(t);
+    const busy = cnt > 0;
+    return `
+      <button class="tile ${busy ? 'is-busy' : 'is-empty'}" style="--tile:var(--${t.color})" data-table="${t.id}">
+        ${busy ? `<span class="tile__count">${cnt}</span>` : ''}
+        <span class="tile__emoji">${esc(t.emoji)}</span>
+        <span class="tile__name">${esc(t.name)}</span>
+        ${busy ? `<span class="tile__sum">${formatPrice(sum)}</span>` : ''}
+      </button>`;
+  }).join('') + `
+    <button class="tile tile--add" id="addTableTile">
+      <span class="tile__emoji">＋</span>
+      <span class="tile__name">Стол</span>
+    </button>`;
+
+  $$('.tile[data-table]', grid).forEach((tile) => {
+    const id = tile.dataset.table;
+    tile.addEventListener('click', () => {
+      tg.haptic('light');
+      activeTableId = id;
+      const t = DB.getTable(id);
+      // Если за столом уже есть заказ — открываем счёт, иначе сразу меню
+      if (t.order.length) nav.go('order', { title: `${t.emoji} ${t.name}` });
+      else nav.go('menu', { title: `${t.emoji} ${t.name}` });
+    });
+    attachLongPress(tile, () => openTableModal(id));
+  });
+
+  $('#addTableTile').addEventListener('click', () => openTableModal(null));
+}
+
+// Режим перестановки столов
+function renderReorder(grid) {
+  grid.className = '';
+  grid.innerHTML = DB.state.tables.map((t, i) => `
+    <div class="reorder-row" style="--accent:var(--${t.color})">
+      <span class="reorder-row__emoji">${esc(t.emoji)}</span>
+      <span class="reorder-row__name">${esc(t.name)}</span>
+      <span class="reorder-row__btns">
+        <button data-up="${t.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button data-down="${t.id}" ${i === DB.state.tables.length - 1 ? 'disabled' : ''}>↓</button>
+      </span>
+    </div>`).join('');
+
+  const move = (id, dir) => {
+    const arr = DB.state.tables;
+    const i = arr.findIndex((t) => t.id === id);
+    const j = i + dir;
+    if (j < 0 || j >= arr.length) return;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    DB.save();
+    tg.haptic('light');
+    renderReorder(grid);
+  };
+  $$('[data-up]', grid).forEach((b) => b.addEventListener('click', () => move(b.dataset.up, -1)));
+  $$('[data-down]', grid).forEach((b) => b.addEventListener('click', () => move(b.dataset.down, +1)));
+}
+
+/* ----------------------------- ЭКРАН МЕНЮ ----------------------------- */
+function renderMenu() {
   const box = $('#menuSections');
-  box.innerHTML = c.sections.map((s) => `
+  box.innerHTML = DB.state.menu.sections.map((s) => `
     <div class="menu__section">
       <div class="menu__section-head">
         <span class="menu__section-title">${esc(s.name)}</span>
         <span class="menu__section-line"></span>
       </div>
       ${s.items.map((it) => `
-        <button class="dish" style="--accent:var(--${c.color})"
-                data-dish="${it.id}" data-section="${s.id}">
+        <button class="dish" data-dish="${it.id}" data-section="${s.id}">
           <span class="dish__emoji">${esc(it.emoji)}</span>
           <span class="dish__body">
             <span class="dish__name">${esc(it.name)}</span>
-            <span class="dish__cost">${formatCost(it.cost)}</span>
+            <span class="dish__cost">${formatPrice(it.price)}</span>
           </span>
           <span class="dish__plus">＋</span>
         </button>`).join('')}
-    </div>`).join('') || `<p class="screen__lead">В этом меню пока нет задач. Добавьте первую кнопкой ＋.</p>`;
+    </div>`).join('') || `<p class="screen__lead">Меню пусто. Добавьте первое блюдо кнопкой ＋.</p>`;
 
-  // Тап по карточке → окно модификаторов
   $$('.dish[data-dish]', box).forEach((el) => {
-    el.addEventListener('click', () => {
-      const sec = c.sections.find((s) => s.id === el.dataset.section);
-      const item = sec.items.find((i) => i.id === el.dataset.dish);
-      openModifiers(c.id, item);
-    });
+    const sec = DB.state.menu.sections.find((s) => s.id === el.dataset.section);
+    const item = sec.items.find((i) => i.id === el.dataset.dish);
+    el.addEventListener('click', () => openModifiers(item));
+    // Долгое нажатие — редактирование/удаление блюда в меню
+    attachLongPress(el, () => openDishModal(sec.id, item.id));
   });
 
   updateCartFab();
 }
 
-/* ----------------------------------------------------------------------- */
-/* 7. МОДИФИКАТОРЫ ЗАДАЧИ (добавление / редактирование строки заказа)       */
-/* ----------------------------------------------------------------------- */
-
-// Текущее состояние модального окна модификаторов
+/* ------------------------- МОДИФИКАТОРЫ БЛЮДА ------------------------- */
 let modState = null;
 
-// Открыть для добавления новой задачи из меню
-function openModifiers(categoryId, item) {
-  modState = {
-    mode: 'add',
-    categoryId,
-    emoji: item.emoji,
-    name: item.name,
-    qty: 1,
-    priority: 'normal',
-    cost: item.cost,
-    note: '',
-  };
+function openModifiers(item) {
+  if (!activeTableId) { toast('Сначала выберите стол'); return; }
+  modState = { mode: 'add', emoji: item.emoji, name: item.name, qty: 1, price: item.price, mods: [], note: '' };
   fillModifiers();
   openModal('#modalModifiers');
 }
-
-// Открыть для редактирования уже добавленной строки заказа
 function openModifiersEdit(lineId) {
-  const line = DB.state.cart.items.find((i) => i.id === lineId);
+  const line = activeOrder().find((i) => i.id === lineId);
   if (!line) return;
-  modState = {
-    mode: 'edit',
-    lineId,
-    emoji: line.emoji,
-    name: line.name,
-    qty: line.qty,
-    priority: line.priority,
-    cost: line.cost,
-    note: line.note || '',
-  };
+  modState = { mode: 'edit', lineId, emoji: line.emoji, name: line.name, qty: line.qty,
+               price: line.price, mods: [...(line.mods || [])], note: line.note || '' };
   fillModifiers();
   openModal('#modalModifiers');
 }
-
-// Заполнить поля окна из modState
 function fillModifiers() {
   $('#modEmoji').textContent = modState.emoji;
   $('#modTitle').textContent = modState.name;
   $('#qtyVal').textContent = modState.qty;
-  $('#costInput').value = modState.cost;
-  $('#costLabel').textContent = DB.unit === 'points' ? 'Баллы' : 'Оценочное время, мин';
+  $('#costInput').value = modState.price;
   $('#noteInput').value = modState.note;
-  $('#addToCartBtn').textContent = modState.mode === 'edit' ? 'Сохранить изменения' : 'Добавить в заказ';
-  $$('#prioritySegments .segment').forEach((s) =>
-    s.classList.toggle('is-active', s.dataset.priority === modState.priority));
+  $('#addToCartBtn').textContent = modState.mode === 'edit' ? 'Сохранить' : 'Добавить в заказ';
+  // Чипы-модификаторы
+  $('#modChips').innerHTML = MODIFIERS.map((m) =>
+    `<button class="chip ${modState.mods.includes(m) ? 'is-active' : ''}" data-mod="${esc(m)}">${esc(m)}</button>`).join('');
+  $$('#modChips .chip').forEach((c) => c.addEventListener('click', () => {
+    const m = c.dataset.mod;
+    if (modState.mods.includes(m)) modState.mods = modState.mods.filter((x) => x !== m);
+    else modState.mods.push(m);
+    c.classList.toggle('is-active');
+  }));
 }
-
 function bindModifiers() {
-  $('#qtyMinus').addEventListener('click', () => {
-    modState.qty = Math.max(1, modState.qty - 1);
-    $('#qtyVal').textContent = modState.qty;
-  });
-  $('#qtyPlus').addEventListener('click', () => {
-    modState.qty += 1;
-    $('#qtyVal').textContent = modState.qty;
-  });
-  $$('#prioritySegments .segment').forEach((s) => {
-    s.addEventListener('click', () => {
-      modState.priority = s.dataset.priority;
-      $$('#prioritySegments .segment').forEach((x) => x.classList.remove('is-active'));
-      s.classList.add('is-active');
-    });
-  });
+  $('#qtyMinus').addEventListener('click', () => { modState.qty = Math.max(1, modState.qty - 1); $('#qtyVal').textContent = modState.qty; });
+  $('#qtyPlus').addEventListener('click', () => { modState.qty += 1; $('#qtyVal').textContent = modState.qty; });
   $('#addToCartBtn').addEventListener('click', commitModifiers);
 }
-
-// Сохранить результат окна модификаторов в корзину
 function commitModifiers() {
-  modState.cost = Math.max(0, parseInt($('#costInput').value, 10) || 0);
+  modState.price = Math.max(0, parseInt($('#costInput').value, 10) || 0);
   modState.note = $('#noteInput').value.trim();
+  const t = DB.getTable(activeTableId);
+  if (!t) { closeModal('#modalModifiers'); return; }
 
   if (modState.mode === 'add') {
-    // Если в заказе есть задачи из другой категории — спросим о замене
-    const cart = DB.state.cart;
-    const proceed = () => {
-      cart.categoryId = modState.categoryId;
-      cart.items.push({
-        id: uid(),
-        emoji: modState.emoji,
-        name: modState.name,
-        qty: modState.qty,
-        priority: modState.priority,
-        cost: modState.cost,
-        note: modState.note,
-      });
-      DB.save();
-      closeModal('#modalModifiers');
-      tg.haptic('success');
-      toast('Добавлено в заказ');
-      updateCartFab(); updateBadges(); updateMainButton();
-    };
-
-    if (cart.items.length && cart.categoryId && cart.categoryId !== modState.categoryId) {
-      const prev = DB.getCategory(cart.categoryId);
-      tg.confirm(`В заказе есть задачи из «${prev ? prev.name : '—'}». Очистить и начать заказ для новой категории?`, (ok) => {
-        if (ok) { cart.items = []; proceed(); }
-        else { closeModal('#modalModifiers'); }
-      });
-    } else {
-      proceed();
-    }
+    t.order.push({ id: uid(), emoji: modState.emoji, name: modState.name, qty: modState.qty,
+                   price: modState.price, mods: modState.mods, note: modState.note });
+    DB.save();
+    closeModal('#modalModifiers');
+    tg.haptic('success');
+    toast('Добавлено в заказ');
+    updateCartFab(); updateMainButton();
   } else {
-    // Режим редактирования строки
-    const line = DB.state.cart.items.find((i) => i.id === modState.lineId);
-    if (line) {
-      line.qty = modState.qty;
-      line.priority = modState.priority;
-      line.cost = modState.cost;
-      line.note = modState.note;
-      DB.save();
-    }
+    const line = t.order.find((i) => i.id === modState.lineId);
+    if (line) Object.assign(line, { qty: modState.qty, price: modState.price, mods: modState.mods, note: modState.note });
+    DB.save();
     closeModal('#modalModifiers');
     tg.haptic('light');
-    renderCart(); updateBadges(); updateMainButton();
+    renderOrder(); updateMainButton();
   }
 }
 
-/* ----------------------------------------------------------------------- */
-/* 8. ЭКРАН ЗАКАЗА (корзина)                                               */
-/* ----------------------------------------------------------------------- */
-
-function renderCart() {
-  const cart = DB.state.cart;
+/* ------------------------- ЭКРАН ЗАКАЗА СТОЛА ------------------------- */
+function renderOrder() {
+  const order = activeOrder();
   const list = $('#ticketList');
   const empty = $('#cartEmpty');
   const summary = $('#cartSummary');
+  const addMore = $('#addMoreBtn');
   const completeBtn = $('#cartCompleteBtn');
 
-  if (!cart.items.length) {
+  if (!order.length) {
     list.innerHTML = '';
-    empty.hidden = false;
-    summary.hidden = true;
-    completeBtn.hidden = true;
+    empty.hidden = false; summary.hidden = true; addMore.hidden = true; completeBtn.hidden = true;
     return;
   }
-  empty.hidden = true;
-  summary.hidden = false;
+  empty.hidden = true; summary.hidden = false; addMore.hidden = false;
+  completeBtn.hidden = !!tg.api;   // запасная кнопка только вне Telegram
 
-  // Запасная кнопка нужна только там, где нет нативной MainButton Telegram
-  completeBtn.hidden = !!tg.api;
+  list.innerHTML = order.map((it) => ticketRowHTML(it)).join('');
+  bindTicketRows(list, true);
 
-  list.innerHTML = cart.items.map((it) => ticketRowHTML(it)).join('');
-  bindTicketRows(list, /* editable */ true);
-
-  const total = cart.items.reduce((s, it) => s + it.cost * it.qty, 0);
-  $('#cartTotal').textContent = formatCost(total);
+  const total = order.reduce((s, it) => s + it.price * it.qty, 0);
+  $('#cartTotal').textContent = formatPrice(total);
 }
 
-// Разметка одной строки заказа (используется и в истории)
 function ticketRowHTML(it, withDelete = true) {
-  const pr = PRIORITY[it.priority] || PRIORITY.normal;
+  const mods = (it.mods && it.mods.length) ? it.mods.map((m) => `<span class="tag">• ${esc(m)}</span>`).join('') : '';
   const note = it.note ? `<div class="ticket-row__note">«${esc(it.note)}»</div>` : '';
   return `
     <div class="ticket-row" data-line="${it.id}">
@@ -575,8 +457,7 @@ function ticketRowHTML(it, withDelete = true) {
         <div class="ticket-row__body">
           <div class="ticket-row__name">${esc(it.name)}</div>
           <div class="ticket-row__meta">
-            <span class="tag">${pr.emoji} ${pr.label}</span>
-            <span class="tag">⏱ ${formatCost(it.cost)}</span>
+            <span class="tag">${formatPrice(it.price)}</span>${mods}
           </div>
           ${note}
         </div>
@@ -585,19 +466,16 @@ function ticketRowHTML(it, withDelete = true) {
     </div>`;
 }
 
-// Навешиваем свайп-удаление и тап-редактирование на строки
 function bindTicketRows(root, editable) {
   $$('.ticket-row', root).forEach((row) => {
     const content = $('.ticket-row__content', row);
     const delBtn = $('.ticket-row__delete', row);
     let startX = 0, dx = 0, dragging = false, moved = false;
-
     const onDown = (x) => { startX = x; dx = 0; dragging = true; moved = false; };
     const onMove = (x) => {
       if (!dragging) return;
       dx = x - startX;
       if (Math.abs(dx) > 6) moved = true;
-      // Тянем только влево, ограничиваем шириной кнопки удаления
       let t = Math.min(0, Math.max(-84, dx + (row.classList.contains('is-open') ? -84 : 0)));
       content.style.transition = 'none';
       content.style.transform = `translateX(${t}px)`;
@@ -605,277 +483,256 @@ function bindTicketRows(root, editable) {
     const onUp = () => {
       if (!dragging) return;
       dragging = false;
-      content.style.transition = '';
-      content.style.transform = '';
+      content.style.transition = ''; content.style.transform = '';
       const open = row.classList.contains('is-open');
-      // Решаем, открыть «удалить» или закрыть
       if (!open && dx < -42) { closeAllRows(); row.classList.add('is-open'); }
       else if (open && dx > 42) { row.classList.remove('is-open'); }
       else if (!moved) {
-        // Это был тап: открытую строку закрываем, закрытую — редактируем
         if (open) row.classList.remove('is-open');
         else if (editable) openModifiersEdit(row.dataset.line);
       }
     };
-
-    // Унифицированные указатели (мышь + тач)
     content.addEventListener('pointerdown', (e) => onDown(e.clientX));
     content.addEventListener('pointermove', (e) => onMove(e.clientX));
     content.addEventListener('pointerup', onUp);
     content.addEventListener('pointercancel', onUp);
     content.addEventListener('pointerleave', () => { if (dragging) onUp(); });
-
-    if (delBtn) delBtn.addEventListener('click', () => removeCartLine(row.dataset.line));
+    if (delBtn) delBtn.addEventListener('click', () => removeOrderLine(row.dataset.line));
   });
 }
-
 function closeAllRows() { $$('.ticket-row.is-open').forEach((r) => r.classList.remove('is-open')); }
 
-function removeCartLine(lineId) {
-  DB.state.cart.items = DB.state.cart.items.filter((i) => i.id !== lineId);
-  if (!DB.state.cart.items.length) DB.state.cart.categoryId = null;
+function removeOrderLine(lineId) {
+  const t = DB.getTable(activeTableId);
+  if (!t) return;
+  t.order = t.order.filter((i) => i.id !== lineId);
   DB.save();
   tg.haptic('warning');
-  renderCart(); updateBadges(); updateMainButton();
+  renderOrder(); updateMainButton();
 }
 
-// Завершить заказ: сохранить в историю и очистить корзину
+// Закрыть стол: заказ → в историю, стол освобождается
 function completeOrder() {
-  const cart = DB.state.cart;
-  if (!cart.items.length) return;
-  const c = DB.getCategory(cart.categoryId);
-  const total = cart.items.reduce((s, it) => s + it.cost * it.qty, 0);
-
+  const t = DB.getTable(activeTableId);
+  if (!t || !t.order.length) return;
+  const total = t.order.reduce((s, it) => s + it.price * it.qty, 0);
   DB.state.history.unshift({
     id: uid(),
     date: new Date().toISOString(),
-    categoryId: cart.categoryId,
-    categoryName: c ? c.name : 'Без категории',
-    categoryEmoji: c ? c.emoji : '🧾',
-    categoryColor: c ? c.color : 'c2',
-    items: cart.items.map((it) => ({ ...it, status: 'active' })),  // помечаем активными
+    tableId: t.id, tableName: t.name, tableEmoji: t.emoji, tableColor: t.color,
+    items: t.order.map((it) => ({ ...it })),
     total,
-    count: cart.items.reduce((n, it) => n + it.qty, 0),
+    count: t.order.reduce((n, it) => n + it.qty, 0),
   });
-
-  cart.items = [];
-  cart.categoryId = null;
+  t.order = [];
   DB.save();
   tg.haptic('success');
-  toast('Заказ завершён и сохранён в историю');
-  nav.switchTop('history');
+  toast('Стол закрыт, заказ в истории');
+  nav.switchTop('tables');
 }
 
-/* ----------------------------------------------------------------------- */
-/* 9. ИСТОРИЯ ЗАКАЗОВ                                                       */
-/* ----------------------------------------------------------------------- */
-
+/* ----------------------------- ИСТОРИЯ ----------------------------- */
 function renderHistory() {
   const list = $('#historyList');
   const empty = $('#historyEmpty');
-  if (!DB.state.history.length) {
-    list.innerHTML = ''; empty.hidden = false; return;
-  }
+  if (!DB.state.history.length) { list.innerHTML = ''; empty.hidden = false; return; }
   empty.hidden = true;
-
   list.innerHTML = DB.state.history.map((o) => {
     const d = new Date(o.date);
-    const dateStr = d.toLocaleString('ru-RU',
-      { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+    const dateStr = d.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
     return `
-      <button class="history-card" style="--accent:var(--${o.categoryColor || 'c2'})" data-order="${o.id}">
-        <span class="history-card__emoji">${esc(o.categoryEmoji)}</span>
+      <button class="history-card" style="--accent:var(--${o.tableColor || 'c2'})" data-order="${o.id}">
+        <span class="history-card__emoji">${esc(o.tableEmoji)}</span>
         <span class="history-card__body">
-          <span class="history-card__title">${esc(o.categoryName)} · ${o.count} задач</span>
+          <span class="history-card__title">${esc(o.tableName)} · ${o.count} поз.</span>
           <span class="history-card__date">${dateStr}</span>
         </span>
-        <span class="history-card__total">${formatCost(o.total)}</span>
+        <span class="history-card__total">${formatPrice(o.total)}</span>
       </button>`;
   }).join('');
-
-  $$('.history-card', list).forEach((el) => {
-    el.addEventListener('click', () => {
-      const o = DB.state.history.find((x) => x.id === el.dataset.order);
-      nav.go('history-detail', { orderId: o.id, title: `${o.categoryEmoji} ${o.categoryName}` });
-    });
-  });
+  $$('.history-card', list).forEach((el) => el.addEventListener('click', () => {
+    const o = DB.state.history.find((x) => x.id === el.dataset.order);
+    nav.go('history-detail', { orderId: o.id, title: `${o.tableEmoji} ${o.tableName}` });
+  }));
 }
 
 function renderHistoryDetail(orderId) {
   const o = DB.state.history.find((x) => x.id === orderId);
   if (!o) { nav.back(); return; }
   $('#historyDetailList').innerHTML = o.items.map((it) => ticketRowHTML(it, false)).join('');
-  $('#historyDetailTotal').textContent = formatCost(o.total);
-
-  // Повторить заказ — перенести задачи в текущую корзину
+  $('#historyDetailTotal').textContent = formatPrice(o.total);
   $('#repeatOrderBtn').onclick = () => repeatOrder(o);
 }
 
+// Повторить заказ — на текущий активный стол (если есть) или предложить выбрать
 function repeatOrder(order) {
-  const cart = DB.state.cart;
-  const doRepeat = () => {
-    cart.categoryId = order.categoryId;
-    cart.items = order.items.map((it) => ({
-      id: uid(),
-      emoji: it.emoji, name: it.name, qty: it.qty,
-      priority: it.priority, cost: it.cost, note: it.note || '',
+  // По умолчанию повторяем на тот же стол, если он ещё существует
+  let target = DB.getTable(order.tableId) || DB.getTable(activeTableId) || DB.state.tables[0];
+  if (!target) { toast('Нет столов для повтора'); return; }
+  const apply = () => {
+    target.order = order.items.map((it) => ({
+      id: uid(), emoji: it.emoji, name: it.name, qty: it.qty,
+      price: it.price, mods: [...(it.mods || [])], note: it.note || '',
     }));
+    activeTableId = target.id;
     DB.save();
     tg.haptic('success');
-    toast('Задачи добавлены в текущий заказ');
-    nav.switchTop('cart');
+    toast(`Заказ повторён на «${target.name}»`);
+    nav.switchTop('tables');
+    nav.go('order', { title: `${target.emoji} ${target.name}` });
   };
-
-  if (cart.items.length) {
-    tg.confirm('В текущем заказе уже есть задачи. Заменить их повтором этого заказа?', (ok) => { if (ok) doRepeat(); });
-  } else {
-    doRepeat();
-  }
+  if (target.order.length) {
+    tg.confirm(`За столом «${target.name}» уже есть заказ. Заменить его повтором?`, (ok) => { if (ok) apply(); });
+  } else apply();
 }
 
-/* ----------------------------------------------------------------------- */
-/* 10. МОДАЛКА КАТЕГОРИИ (создание / редактирование / удаление)            */
-/* ----------------------------------------------------------------------- */
+/* ------------------------- МОДАЛКА СТОЛА ------------------------- */
+let tableEditId = null;
+let pickedColor = 'c2';
 
-let catEditId = null;
-
-function openCategoryModal(id) {
-  catEditId = id;
+function openTableModal(id) {
+  tableEditId = id;
   const isEdit = !!id;
-  const c = isEdit ? DB.getCategory(id) : null;
-  $('#catModalTitle').textContent = isEdit ? 'Редактировать категорию' : 'Новая категория';
-  $('#catEmoji').value = isEdit ? c.emoji : '🍽️';
-  $('#catName').value = isEdit ? c.name : '';
+  const t = isEdit ? DB.getTable(id) : null;
+  $('#catModalTitle').textContent = isEdit ? 'Редактировать стол' : 'Новый стол';
+  $('#catEmoji').value = isEdit ? t.emoji : '🍽️';
+  $('#catName').value = isEdit ? t.name : '';
+  pickedColor = isEdit ? t.color : COLORS[DB.state.tables.length % COLORS.length];
+  renderSwatches();
   $('#catDeleteBtn').hidden = !isEdit;
   openModal('#modalCategory');
 }
-
-function bindCategoryModal() {
+function renderSwatches() {
+  $('#catSwatches').innerHTML = COLORS.map((c) =>
+    `<button class="swatch ${c === pickedColor ? 'is-active' : ''}" style="background:var(--${c})" data-color="${c}"></button>`).join('');
+  $$('#catSwatches .swatch').forEach((s) => s.addEventListener('click', () => {
+    pickedColor = s.dataset.color; renderSwatches();
+  }));
+}
+function bindTableModal() {
   $('#catSaveBtn').addEventListener('click', () => {
     const emoji = $('#catEmoji').value.trim() || '🍽️';
     const name = $('#catName').value.trim();
-    if (!name) { toast('Введите название'); return; }
-
-    if (catEditId) {
-      const c = DB.getCategory(catEditId);
-      c.emoji = emoji; c.name = name;
+    if (!name) { toast('Введите название стола'); return; }
+    if (tableEditId) {
+      const t = DB.getTable(tableEditId);
+      Object.assign(t, { emoji, name, color: pickedColor });
     } else {
-      // Подбираем цвет по кругу из палитры столов
-      const colors = ['c1','c2','c3','c4','c5','c6','c7','c8'];
-      const color = colors[DB.state.categories.length % colors.length];
-      DB.state.categories.push({ id: uid(), name, emoji, color, sections: [
-        { id: uid(), name: 'Задачи', items: [] },
-      ]});
+      DB.state.tables.push({ id: uid(), name, emoji, color: pickedColor, order: [] });
     }
     DB.save();
     closeModal('#modalCategory');
     tg.haptic('success');
     renderTables();
   });
-
   $('#catDeleteBtn').addEventListener('click', () => {
-    if (!catEditId) return;
-    tg.confirm('Удалить категорию вместе с её меню?', (ok) => {
+    if (!tableEditId) return;
+    const t = DB.getTable(tableEditId);
+    const warn = t.order.length ? 'За столом есть открытый заказ. Удалить стол вместе с заказом?' : 'Удалить этот стол?';
+    tg.confirm(warn, (ok) => {
       if (!ok) return;
-      DB.state.categories = DB.state.categories.filter((c) => c.id !== catEditId);
-      if (DB.state.cart.categoryId === catEditId) { DB.state.cart.items = []; DB.state.cart.categoryId = null; }
+      DB.state.tables = DB.state.tables.filter((x) => x.id !== tableEditId);
+      if (activeTableId === tableEditId) activeTableId = null;
       DB.save();
       closeModal('#modalCategory');
       tg.haptic('warning');
-      renderTables(); updateBadges(); updateMainButton();
+      renderTables();
     });
   });
 }
 
-/* ----------------------------------------------------------------------- */
-/* 11. МОДАЛКА НОВОЙ ЗАДАЧИ В МЕНЮ                                          */
-/* ----------------------------------------------------------------------- */
+/* ------------------------- МОДАЛКА БЛЮДА ------------------------- */
+let dishEdit = null;   // { sectionId, dishId } при редактировании
 
-function openTaskModal() {
-  const { params } = nav.current();
-  const c = DB.getCategory(params.categoryId);
-  if (!c) return;
-
-  $('#taskEmoji').value = '✅';
-  $('#taskName').value = '';
-  $('#taskCost').value = DB.unit === 'points' ? 1 : 10;
-  $('#taskCostLabel').textContent = DB.unit === 'points' ? 'Баллы по умолчанию' : 'Время по умолчанию, мин';
+function openDishModal(sectionId = null, dishId = null) {
+  dishEdit = dishId ? { sectionId, dishId } : null;
+  const isEdit = !!dishId;
+  let dish = null;
+  if (isEdit) {
+    const sec = DB.state.menu.sections.find((s) => s.id === sectionId);
+    dish = sec && sec.items.find((i) => i.id === dishId);
+  }
+  $('#dishModalTitle').textContent = isEdit ? 'Редактировать блюдо' : 'Новое блюдо';
+  $('#taskEmoji').value = isEdit ? dish.emoji : '🍣';
+  $('#taskName').value = isEdit ? dish.name : '';
+  $('#taskCost').value = isEdit ? dish.price : 0;
   $('#taskNewSection').value = '';
+  $('#dishDeleteBtn').hidden = !isEdit;
 
-  // Выпадающий список существующих разделов меню
-  $('#taskSection').innerHTML = c.sections.map((s) =>
-    `<option value="${s.id}">${esc(s.name)}</option>`).join('')
+  $('#taskSection').innerHTML = DB.state.menu.sections.map((s) =>
+    `<option value="${s.id}" ${(isEdit && s.id === sectionId) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')
     || '<option value="">— нет разделов —</option>';
 
   openModal('#modalTask');
 }
-
-function bindTaskModal() {
+function bindDishModal() {
   $('#taskSaveBtn').addEventListener('click', () => {
-    const { params } = nav.current();
-    const c = DB.getCategory(params.categoryId);
-    if (!c) return;
-
-    const emoji = $('#taskEmoji').value.trim() || '✅';
+    const emoji = $('#taskEmoji').value.trim() || '🍣';
     const name = $('#taskName').value.trim();
-    const cost = Math.max(0, parseInt($('#taskCost').value, 10) || 0);
-    if (!name) { toast('Введите название задачи'); return; }
+    const price = Math.max(0, parseInt($('#taskCost').value, 10) || 0);
+    if (!name) { toast('Введите название блюда'); return; }
 
-    // Раздел: либо новый по введённому названию, либо выбранный из списка
-    const newSecName = $('#taskNewSection').value.trim();
-    let section;
-    if (newSecName) {
-      section = { id: uid(), name: newSecName, items: [] };
-      c.sections.push(section);
+    if (dishEdit) {
+      // Редактирование существующего блюда (с возможным переносом в другой раздел)
+      const fromSec = DB.state.menu.sections.find((s) => s.id === dishEdit.sectionId);
+      const dish = fromSec.items.find((i) => i.id === dishEdit.dishId);
+      Object.assign(dish, { emoji, name, price });
+      const newSecName = $('#taskNewSection').value.trim();
+      const targetSecId = $('#taskSection').value;
+      if (newSecName) {
+        const ns = { id: uid(), name: newSecName, items: [] };
+        DB.state.menu.sections.push(ns);
+        fromSec.items = fromSec.items.filter((i) => i.id !== dish.id);
+        ns.items.push(dish);
+      } else if (targetSecId && targetSecId !== dishEdit.sectionId) {
+        const toSec = DB.state.menu.sections.find((s) => s.id === targetSecId);
+        fromSec.items = fromSec.items.filter((i) => i.id !== dish.id);
+        toSec.items.push(dish);
+      }
     } else {
-      section = c.sections.find((s) => s.id === $('#taskSection').value);
-      if (!section) { section = { id: uid(), name: 'Задачи', items: [] }; c.sections.push(section); }
+      // Новое блюдо
+      const newSecName = $('#taskNewSection').value.trim();
+      let section;
+      if (newSecName) { section = { id: uid(), name: newSecName, items: [] }; DB.state.menu.sections.push(section); }
+      else {
+        section = DB.state.menu.sections.find((s) => s.id === $('#taskSection').value);
+        if (!section) { section = { id: uid(), name: 'Без раздела', items: [] }; DB.state.menu.sections.push(section); }
+      }
+      section.items.push({ id: uid(), emoji, name, price });
     }
-
-    section.items.push({ id: uid(), emoji, name, cost });
     DB.save();
     closeModal('#modalTask');
     tg.haptic('success');
-    renderMenu(c.id);
+    renderMenu();
   });
-}
 
-/* ----------------------------------------------------------------------- */
-/* 12. НАСТРОЙКИ + ЭКСПОРТ / ИМПОРТ                                         */
-/* ----------------------------------------------------------------------- */
-
-function openSettings() {
-  $$('#unitSegments .segment').forEach((s) =>
-    s.classList.toggle('is-active', s.dataset.unit === DB.unit));
-  openModal('#modalSettings');
-}
-
-function bindSettings() {
-  // Переключатель единицы измерения
-  $$('#unitSegments .segment').forEach((s) => {
-    s.addEventListener('click', () => {
-      DB.state.settings.unit = s.dataset.unit;
+  $('#dishDeleteBtn').addEventListener('click', () => {
+    if (!dishEdit) return;
+    tg.confirm('Удалить это блюдо из меню?', (ok) => {
+      if (!ok) return;
+      const sec = DB.state.menu.sections.find((s) => s.id === dishEdit.sectionId);
+      sec.items = sec.items.filter((i) => i.id !== dishEdit.dishId);
       DB.save();
-      $$('#unitSegments .segment').forEach((x) => x.classList.remove('is-active'));
-      s.classList.add('is-active');
-      renderCurrent();
+      closeModal('#modalTask');
+      tg.haptic('warning');
+      renderMenu();
     });
   });
+}
 
-  // Экспорт всей базы в JSON-файл
+/* ------------------------- НАСТРОЙКИ ------------------------- */
+function openSettings() { openModal('#modalSettings'); }
+function bindSettings() {
   $('#exportBtn').addEventListener('click', () => {
     const data = JSON.stringify(DB.state, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `moy-zakaz-${new Date().toISOString().slice(0,10)}.json`;
+    a.href = url; a.download = `moy-zakaz-${new Date().toISOString().slice(0,10)}.json`;
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
     toast('Файл выгружен');
   });
-
-  // Импорт базы из JSON-файла
   $('#importBtn').addEventListener('click', () => $('#importFile').click());
   $('#importFile').addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -884,98 +741,70 @@ function bindSettings() {
     reader.onload = () => {
       try {
         const data = JSON.parse(reader.result);
-        if (!data || !Array.isArray(data.categories)) throw new Error('bad');
+        if (!data || !data.menu || !Array.isArray(data.tables)) throw new Error('bad');
+        data.version = 2;
+        data.settings = data.settings || { currency: '₽' };
+        data.history = data.history || [];
         DB.state = data;
-        // Гарантируем обязательные поля
-        DB.state.settings = DB.state.settings || { unit: 'time' };
-        DB.state.cart = DB.state.cart || { categoryId: null, items: [] };
-        DB.state.history = DB.state.history || [];
         DB.save();
         closeModal('#modalSettings');
         tg.haptic('success');
         toast('База импортирована');
+        activeTableId = null;
         nav.switchTop('tables');
-      } catch (err) {
-        toast('Не удалось прочитать файл');
-      }
+      } catch (err) { toast('Не удалось прочитать файл'); }
     };
     reader.readAsText(file);
     e.target.value = '';
   });
-
-  // Полный сброс
   $('#resetBtn').addEventListener('click', () => {
-    tg.confirm('Сбросить все данные к стандартному набору? Текущие категории, заказ и историю нельзя будет вернуть.', (ok) => {
+    tg.confirm('Сбросить меню, столы и историю к стандартным? Отменить нельзя.', (ok) => {
       if (!ok) return;
       DB.reset();
+      activeTableId = null; reorderMode = false;
       closeModal('#modalSettings');
       tg.haptic('warning');
       nav.switchTop('tables');
-      updateBadges(); updateMainButton();
     });
   });
 }
 
-/* ----------------------------------------------------------------------- */
-/* 13. ОБЩИЕ ЭЛЕМЕНТЫ: модалки, тосты, бейджи, MainButton, FAB             */
-/* ----------------------------------------------------------------------- */
-
-function openModal(sel) {
-  closeAllRows();
-  $(sel).hidden = false;
-}
+/* ------------------------- ОБЩИЕ ЭЛЕМЕНТЫ ------------------------- */
+function openModal(sel) { closeAllRows(); $(sel).hidden = false; }
 function closeModal(sel) { $(sel).hidden = true; }
-
-// Любая модалка закрывается тапом по затемнению
 function bindModalBackdrops() {
-  $$('.modal').forEach((m) => {
-    $('.modal__backdrop', m).addEventListener('click', () => { m.hidden = true; });
-  });
+  $$('.modal').forEach((m) => $('.modal__backdrop', m).addEventListener('click', () => { m.hidden = true; }));
 }
 
 let toastTimer = null;
 function toast(text) {
   const el = $('#toast');
-  el.textContent = text;
-  el.hidden = false;
+  el.textContent = text; el.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.hidden = true; }, 2200);
 }
 
-// Бейджи количества задач в заказе (таб-бар)
-function updateBadges() {
-  const n = DB.state.cart.items.reduce((s, it) => s + it.qty, 0);
-  const badge = $('#tabCartBadge');
-  if (n) { badge.hidden = false; badge.textContent = n; } else { badge.hidden = true; }
-}
-
-// Плавающая кнопка «Заказ» на экране меню
 function updateCartFab() {
   const fab = $('#cartFab');
   const onMenu = nav.current().screen === 'menu';
-  const n = DB.state.cart.items.reduce((s, it) => s + it.qty, 0);
+  const order = activeOrder();
+  const n = order.reduce((s, it) => s + it.qty, 0);
   if (onMenu && n) {
     fab.hidden = false;
     $('#cartFabBadge').textContent = n;
-  } else {
-    fab.hidden = true;
-  }
+    $('#cartFabSum').textContent = formatPrice(order.reduce((s, it) => s + it.price * it.qty, 0));
+  } else fab.hidden = true;
 }
 
-// MainButton «Завершить заказ» — показываем только на экране заказа
 function updateMainButton() {
-  const onCart = nav.current().screen === 'cart';
-  const n = DB.state.cart.items.length;
-  if (onCart && n) tg.mainButton('Завершить заказ', completeOrder);
+  const onOrder = nav.current().screen === 'order';
+  const n = activeOrder().length;
+  if (onOrder && n) tg.mainButton('Закрыть стол · оплачено', completeOrder);
   else tg.hideMainButton();
   updateCartFab();
-  updateBadges();
 }
 
-/* ----------------------------------------------------------------------- */
-/* 14. ДОЛГОЕ НАЖАТИЕ (универсальный помощник)                             */
-/* ----------------------------------------------------------------------- */
-
+/* ------------------------- ДОЛГОЕ НАЖАТИЕ ------------------------- */
 function attachLongPress(el, cb, ms = 500) {
   let timer = null, suppressClick = false;
   el.addEventListener('touchstart', () => {
@@ -985,63 +814,58 @@ function attachLongPress(el, cb, ms = 500) {
   const cancel = () => clearTimeout(timer);
   el.addEventListener('touchend', cancel);
   el.addEventListener('touchmove', cancel);
-  // Если сработало долгое нажатие — гасим синтетический click (фаза перехвата,
-  // раньше обычного обработчика навигации), чтобы не открыть меню заодно.
   el.addEventListener('click', (e) => {
     if (suppressClick) { e.stopPropagation(); e.preventDefault(); suppressClick = false; }
   }, true);
-  // Десктоп: правый клик для отладки
   el.addEventListener('contextmenu', (e) => { e.preventDefault(); cb(); });
 }
 
-/* ----------------------------------------------------------------------- */
-/* 15. ИНИЦИАЛИЗАЦИЯ                                                        */
-/* ----------------------------------------------------------------------- */
-
+/* ------------------------- ИНИЦИАЛИЗАЦИЯ ------------------------- */
 function init() {
   DB.load();
   tg.init();
-
-  // Кнопка «Назад» Telegram
   tg.onBack(() => nav.back());
 
-  // Нижняя навигация
   $$('.tabbar__btn').forEach((b) =>
-    b.addEventListener('click', () => { tg.haptic('light'); nav.switchTop(b.dataset.nav); }));
+    b.addEventListener('click', () => { tg.haptic('light'); reorderMode = false; nav.switchTop(b.dataset.nav); }));
 
-  // FAB «добавить»: категория или задача в зависимости от экрана
   $('#addFab').addEventListener('click', () => {
     const role = $('#addFab').dataset.role;
-    if (role === 'category') openCategoryModal(null);
-    else if (role === 'task') openTaskModal();
+    if (role === 'table') openTableModal(null);
+    else if (role === 'dish') openDishModal(null, null);
   });
 
-  // Плавающая кнопка «Заказ» с экрана меню
-  $('#cartFab').addEventListener('click', () => nav.switchTop('cart'));
+  $('#reorderBtn').addEventListener('click', () => {
+    reorderMode = !reorderMode;
+    nav.apply();
+  });
 
-  // Кнопки на пустой корзине
-  $('#cartEmptyBack').addEventListener('click', () => nav.switchTop('tables'));
-
-  // Запасная кнопка завершения заказа (режим браузера без MainButton)
+  // Плавающая кнопка счёта → экран заказа стола
+  $('#cartFab').addEventListener('click', () => {
+    const t = DB.getTable(activeTableId);
+    nav.go('order', { title: t ? `${t.emoji} ${t.name}` : 'Заказ' });
+  });
+  // Кнопки на экране заказа
+  $('#cartEmptyBack').addEventListener('click', () => {
+    const t = DB.getTable(activeTableId);
+    nav.go('menu', { title: t ? `${t.emoji} ${t.name}` : 'Меню' });
+  });
+  $('#addMoreBtn').addEventListener('click', () => {
+    const t = DB.getTable(activeTableId);
+    nav.go('menu', { title: t ? `${t.emoji} ${t.name}` : 'Меню' });
+  });
   $('#cartCompleteBtn').addEventListener('click', completeOrder);
 
-  // Шестерёнка настроек
   $('#settingsBtn').addEventListener('click', openSettings);
 
-  // Привязка обработчиков модалок (один раз)
   bindModifiers();
-  bindCategoryModal();
-  bindTaskModal();
+  bindTableModal();
+  bindDishModal();
   bindSettings();
   bindModalBackdrops();
 
-  // Первый показ
   nav.apply();
-  updateBadges();
 }
 
-// Старт после загрузки DOM
-if (document.readyState === 'loading')
-  document.addEventListener('DOMContentLoaded', init);
-else
-  init();
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();
