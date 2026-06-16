@@ -575,7 +575,7 @@ select.field__input { appearance: none; }
 
 /* На плитке стола — сумма открытого счёта */
 .tile__sum {
-  position: absolute; left: 12px; bottom: 12px;
+  position: absolute; right: 12px; bottom: 12px;
   background: rgba(0,0,0,0.28); border-radius: 999px;
   font-size: 12px; font-weight: 700; padding: 3px 9px;
 }
