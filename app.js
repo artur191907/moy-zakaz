@@ -208,6 +208,7 @@ const SCREENS = {
 
 let activeTableId = null;   // стол, с которым сейчас работаем
 let reorderMode = false;    // включён ли режим перестановки столов
+let menuQuery = '';         // текущий поисковый запрос в меню
 
 const nav = {
   stack: [{ screen: 'tables', params: {} }],
@@ -329,15 +330,48 @@ function renderReorder(grid) {
 }
 
 /* ----------------------------- ЭКРАН МЕНЮ ----------------------------- */
+// Вход в меню: сбрасываем поиск и рисуем полный список
 function renderMenu() {
+  menuQuery = '';
+  const si = $('#menuSearch');
+  if (si) si.value = '';
+  $('#menuSearchClear').hidden = true;
+  renderMenuList();
+}
+
+// Отрисовка списка блюд с учётом поискового запроса (menuQuery).
+// Перерисовывает только #menuSections, поэтому фокус в строке поиска не теряется.
+function renderMenuList() {
   const box = $('#menuSections');
-  box.innerHTML = DB.state.menu.sections.map((s) => `
+  const q = menuQuery.trim().toLowerCase();
+
+  // Фильтрация: блюдо подходит, если совпадает его название
+  // ИЛИ если запрос совпал с названием раздела (тогда показываем весь раздел).
+  const groups = DB.state.menu.sections.map((s) => {
+    if (!q) return { s, items: s.items };
+    const sectionMatch = s.name.toLowerCase().includes(q);
+    const items = sectionMatch ? s.items : s.items.filter((it) => it.name.toLowerCase().includes(q));
+    return { s, items };
+  }).filter((g) => g.items.length);
+
+  if (!DB.state.menu.sections.length) {
+    box.innerHTML = `<p class="screen__lead">Меню пусто. Добавьте первое блюдо кнопкой ＋.</p>`;
+    updateCartFab();
+    return;
+  }
+  if (!groups.length) {
+    box.innerHTML = `<p class="screen__lead">Ничего не найдено по запросу «${esc(menuQuery.trim())}». Можно добавить новое блюдо кнопкой ＋.</p>`;
+    updateCartFab();
+    return;
+  }
+
+  box.innerHTML = groups.map(({ s, items }) => `
     <div class="menu__section">
       <div class="menu__section-head">
         <span class="menu__section-title">${esc(s.name)}</span>
         <span class="menu__section-line"></span>
       </div>
-      ${s.items.map((it) => `
+      ${items.map((it) => `
         <button class="dish" data-dish="${it.id}" data-section="${s.id}">
           <span class="dish__emoji">${esc(it.emoji)}</span>
           <span class="dish__body">
@@ -346,7 +380,7 @@ function renderMenu() {
           </span>
           <span class="dish__plus">＋</span>
         </button>`).join('')}
-    </div>`).join('') || `<p class="screen__lead">Меню пусто. Добавьте первое блюдо кнопкой ＋.</p>`;
+    </div>`).join('');
 
   $$('.dish[data-dish]', box).forEach((el) => {
     const sec = DB.state.menu.sections.find((s) => s.id === el.dataset.section);
@@ -838,6 +872,24 @@ function init() {
   $('#reorderBtn').addEventListener('click', () => {
     reorderMode = !reorderMode;
     nav.apply();
+  });
+
+  // Поиск по меню: фильтруем список по мере ввода (фокус не теряется,
+  // т.к. перерисовывается только список блюд, а не сама строка поиска)
+  const search = $('#menuSearch');
+  if (search) {
+    search.addEventListener('input', () => {
+      menuQuery = search.value;
+      $('#menuSearchClear').hidden = !menuQuery.trim();
+      renderMenuList();
+    });
+  }
+  $('#menuSearchClear').addEventListener('click', () => {
+    menuQuery = '';
+    const s = $('#menuSearch');
+    s.value = ''; s.focus();
+    $('#menuSearchClear').hidden = true;
+    renderMenuList();
   });
 
   // Плавающая кнопка счёта → экран заказа стола

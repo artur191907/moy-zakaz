@@ -31,6 +31,12 @@
 
     <!-- ЭКРАН 2: МЕНЮ (общее меню заведения) -->
     <section class="screen" id="screen-menu" data-screen="menu">
+      <div class="menu-search">
+        <span class="menu-search__icon">🔍</span>
+        <input class="menu-search__input" id="menuSearch" type="search" inputmode="search"
+               placeholder="Поиск блюда…" autocomplete="off" />
+        <button class="menu-search__clear" id="menuSearchClear" hidden aria-label="Очистить">✕</button>
+      </div>
       <div class="menu" id="menuSections"><!-- разделы и блюда из JS --></div>
 
       <button class="cart-fab" id="cartFab" hidden>
