@@ -824,10 +824,9 @@ function renderOrder() {
   billBtn.textContent = t.billRequested ? '✓ Счёт запрошен' : '💳 Просит счёт';
   billBtn.classList.toggle('is-active', !!t.billRequested);
 
-  // Нижние кнопки. В Telegram действия дублируются нативной MainButton (см. updateMainButton).
+  // Нижние кнопки заказа — прямо в экране (нативную кнопку Telegram не используем, чтобы не дублировать).
   const newCount = order.reduce((n, it) => n + ((it.status || 'new') === 'new' ? it.qty : 0), 0);
-  if (tg.api) { sendBtn.hidden = true; completeBtn.hidden = true; }
-  else if (newCount > 0) { sendBtn.hidden = false; sendBtn.textContent = `🍳 Отправить на кухню · ${newCount}`; completeBtn.hidden = true; }
+  if (newCount > 0) { sendBtn.hidden = false; sendBtn.textContent = `🍳 Отправить на кухню · ${newCount}`; completeBtn.hidden = true; }
   else { sendBtn.hidden = true; completeBtn.hidden = false; }
 }
 
@@ -1462,15 +1461,9 @@ function updateCartFab() {
 }
 
 function updateMainButton() {
-  const onOrder = nav.current().screen === 'order';
-  const order = activeOrder();
-  if (onOrder && order.length) {
-    const newCount = order.reduce((n, it) => n + ((it.status || 'new') === 'new' ? it.qty : 0), 0);
-    if (newCount > 0) tg.mainButton(`Отправить на кухню · ${newCount}`, sendToKitchen);
-    else tg.mainButton('Закрыть стол · оплачено', completeOrder);
-  } else {
-    tg.hideMainButton();
-  }
+  // Все действия заказа — кнопками внутри экрана (renderOrder).
+  // Нативную кнопку Telegram не используем, чтобы не было дубля внизу.
+  tg.hideMainButton();
   updateCartFab();
 }
 

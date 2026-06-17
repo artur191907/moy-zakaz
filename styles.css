@@ -429,6 +429,7 @@ body {
   font-family: inherit;
 }
 .btn:active { transform: scale(0.985); }
+[hidden] { display: none !important; }
 .btn--accent { background: var(--button); color: var(--button-text); }
 .btn--ghost {
   background: var(--secondary-bg); color: var(--text);
