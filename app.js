@@ -22,6 +22,13 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
 const COLORS = ['c1','c2','c3','c4','c5','c6','c7','c8'];
 // Набор модификаторов блюда (как модификаторы в iiko)
 const MODIFIERS = ['Без васаби', 'Без имбиря', 'Острее', 'С собой'];
+// Статусы позиции в заказе: новое → на кухне → подано
+const STATUS = {
+  new:    { label: '🆕 Новое',   cls: 'is-new' },
+  sent:   { label: '🍳 На кухне', cls: 'is-sent' },
+  served: { label: '✅ Подано',  cls: 'is-served' },
+};
+const STATUS_SEQ = ['new', 'sent', 'served'];
 
 /* --------------------------- TELEGRAM WEBAPP --------------------------- */
 const TG = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
@@ -395,9 +402,10 @@ function renderTables() {
   grid.innerHTML = DB.state.tables.map((t) => {
     const sum = sumOf(t), cnt = cntOf(t);
     const busy = cnt > 0;
+    const hasNew = t.order.some((it) => (it.status || 'new') === 'new');
     return `
       <button class="tile ${busy ? 'is-busy' : 'is-empty'}" style="--tile:var(--${t.color})" data-table="${t.id}">
-        ${busy ? `<span class="tile__count">${cnt}</span>` : ''}
+        ${busy ? `<span class="tile__count ${hasNew ? 'is-new' : ''}">${cnt}</span>` : ''}
         <span class="tile__emoji">${esc(t.emoji)}</span>
         <span class="tile__name">${esc(t.name)}</span>
         ${busy ? `<span class="tile__sum">${formatPrice(sum)}</span>` : ''}
@@ -494,21 +502,24 @@ function renderMenuList() {
         <span class="menu__section-line"></span>
       </div>
       ${items.map((it) => `
-        <button class="dish" data-dish="${it.id}" data-section="${s.id}">
+        <button class="dish ${it.stop ? 'is-stopped' : ''}" data-dish="${it.id}" data-section="${s.id}">
           <span class="dish__emoji">${esc(it.emoji)}</span>
           <span class="dish__body">
             <span class="dish__name">${esc(it.name)}</span>
             <span class="dish__cost">${formatPrice(it.price)}${it.weight ? ' · ' + esc(it.weight) : ''}</span>
           </span>
-          <span class="dish__plus">＋</span>
+          ${it.stop ? '<span class="dish__stop">Стоп</span>' : '<span class="dish__plus">＋</span>'}
         </button>`).join('')}
     </div>`).join('');
 
   $$('.dish[data-dish]', box).forEach((el) => {
     const sec = DB.state.menu.sections.find((s) => s.id === el.dataset.section);
     const item = sec.items.find((i) => i.id === el.dataset.dish);
-    el.addEventListener('click', () => openModifiers(item));
-    // Долгое нажатие — редактирование/удаление блюда в меню
+    el.addEventListener('click', () => {
+      if (item.stop) { toast('В стоп-листе — нет в наличии'); tg.haptic('warning'); return; }
+      openModifiers(item);
+    });
+    // Долгое нажатие — редактирование / стоп-лист / удаление блюда
     attachLongPress(el, () => openDishModal(sec.id, item.id));
   });
 
@@ -562,7 +573,7 @@ function commitModifiers() {
 
   if (modState.mode === 'add') {
     t.order.push({ id: uid(), emoji: modState.emoji, name: modState.name, qty: modState.qty,
-                   price: modState.price, weight: modState.weight, mods: modState.mods, note: modState.note });
+                   price: modState.price, weight: modState.weight, mods: modState.mods, note: modState.note, status: 'new' });
     DB.save();
     closeModal('#modalModifiers');
     tg.haptic('success');
@@ -586,38 +597,56 @@ function renderOrder() {
   const summary = $('#cartSummary');
   const addMore = $('#addMoreBtn');
   const completeBtn = $('#cartCompleteBtn');
+  const sendBtn = $('#sendKitchenBtn');
 
   if (!order.length) {
     list.innerHTML = '';
-    empty.hidden = false; summary.hidden = true; addMore.hidden = true; completeBtn.hidden = true;
+    empty.hidden = false; summary.hidden = true; addMore.hidden = true;
+    completeBtn.hidden = true; sendBtn.hidden = true;
     return;
   }
   empty.hidden = true; summary.hidden = false; addMore.hidden = false;
-  completeBtn.hidden = !!tg.api;   // запасная кнопка только вне Telegram
 
-  list.innerHTML = order.map((it) => ticketRowHTML(it)).join('');
+  list.innerHTML = order.map((it) => ticketRowHTML(it, true)).join('');
   bindTicketRows(list, true);
 
   const total = order.reduce((s, it) => s + it.price * it.qty, 0);
   $('#cartTotal').textContent = formatPrice(total);
+
+  // Нижние кнопки. В Telegram действия дублируются нативной MainButton (см. updateMainButton).
+  const newCount = order.reduce((n, it) => n + ((it.status || 'new') === 'new' ? it.qty : 0), 0);
+  if (tg.api) { sendBtn.hidden = true; completeBtn.hidden = true; }
+  else if (newCount > 0) { sendBtn.hidden = false; sendBtn.textContent = `🍳 Отправить на кухню · ${newCount}`; completeBtn.hidden = true; }
+  else { sendBtn.hidden = true; completeBtn.hidden = false; }
 }
 
-function ticketRowHTML(it, withDelete = true) {
+function ticketRowHTML(it, editable = true) {
+  const st = STATUS[it.status] || STATUS.new;
   const mods = (it.mods && it.mods.length) ? it.mods.map((m) => `<span class="tag">• ${esc(m)}</span>`).join('') : '';
   const note = it.note ? `<div class="ticket-row__note">«${esc(it.note)}»</div>` : '';
+  // Статус-пилюля: в активном заказе по ней можно тапать (меняет статус), в истории — статична
+  const statusPill = `<button class="status-pill ${st.cls}" data-status-btn ${editable ? '' : 'disabled'}>${st.label}</button>`;
+  // Справа: степпер количества (в заказе) или просто ×N (в истории)
+  const right = editable
+    ? `<div class="line-stepper">
+         <button class="line-stepper__btn" data-minus>−</button>
+         <span class="line-stepper__val">${it.qty}</span>
+         <button class="line-stepper__btn" data-plus>＋</button>
+       </div>`
+    : (it.qty > 1 ? `<span class="ticket-row__qty">×${it.qty}</span>` : '');
   return `
     <div class="ticket-row" data-line="${it.id}">
-      ${withDelete ? '<button class="ticket-row__delete">Удалить</button>' : ''}
+      ${editable ? '<button class="ticket-row__delete">Удалить</button>' : ''}
       <div class="ticket-row__content">
         <span class="ticket-row__emoji">${esc(it.emoji)}</span>
         <div class="ticket-row__body">
           <div class="ticket-row__name">${esc(it.name)}</div>
           <div class="ticket-row__meta">
-            <span class="tag">${formatPrice(it.price)}</span>${it.weight ? `<span class="tag">${esc(it.weight)}</span>` : ''}${mods}
+            ${statusPill}<span class="tag">${formatPrice(it.price)}</span>${it.weight ? `<span class="tag">${esc(it.weight)}</span>` : ''}${mods}
           </div>
           ${note}
         </div>
-        ${it.qty > 1 ? `<span class="ticket-row__qty">×${it.qty}</span>` : ''}
+        ${right}
       </div>
     </div>`;
 }
@@ -654,6 +683,17 @@ function bindTicketRows(root, editable) {
     content.addEventListener('pointercancel', onUp);
     content.addEventListener('pointerleave', () => { if (dragging) onUp(); });
     if (delBtn) delBtn.addEventListener('click', () => removeOrderLine(row.dataset.line));
+
+    // Степпер количества и статус-пилюля.
+    // gobbleDown гасит pointerdown, чтобы строка не начала свайп/тап при нажатии этих кнопок.
+    const minusBtn  = row.querySelector('[data-minus]');
+    const plusBtn   = row.querySelector('[data-plus]');
+    const statusBtn = row.querySelector('[data-status-btn]');
+    const gobbleDown = (e) => e.stopPropagation();
+    [minusBtn, plusBtn, statusBtn].forEach((b) => { if (b) b.addEventListener('pointerdown', gobbleDown); });
+    if (minusBtn) minusBtn.addEventListener('click', (e) => { e.stopPropagation(); changeQty(row.dataset.line, -1); });
+    if (plusBtn)  plusBtn.addEventListener('click', (e) => { e.stopPropagation(); changeQty(row.dataset.line, +1); });
+    if (statusBtn && !statusBtn.disabled) statusBtn.addEventListener('click', (e) => { e.stopPropagation(); cycleStatus(row.dataset.line); });
   });
 }
 function closeAllRows() { $$('.ticket-row.is-open').forEach((r) => r.classList.remove('is-open')); }
@@ -664,6 +704,44 @@ function removeOrderLine(lineId) {
   t.order = t.order.filter((i) => i.id !== lineId);
   DB.save();
   tg.haptic('warning');
+  renderOrder(); updateMainButton();
+}
+
+// Изменить количество прямо в строке (минимум 1; для удаления — свайп)
+function changeQty(lineId, delta) {
+  const t = DB.getTable(activeTableId);
+  if (!t) return;
+  const line = t.order.find((i) => i.id === lineId);
+  if (!line) return;
+  line.qty = Math.max(1, line.qty + delta);
+  DB.save();
+  tg.haptic('light');
+  renderOrder(); updateMainButton();
+}
+
+// Переключить статус позиции: новое → на кухне → подано → новое
+function cycleStatus(lineId) {
+  const t = DB.getTable(activeTableId);
+  if (!t) return;
+  const line = t.order.find((i) => i.id === lineId);
+  if (!line) return;
+  const i = STATUS_SEQ.indexOf(line.status || 'new');
+  line.status = STATUS_SEQ[(i + 1) % STATUS_SEQ.length];
+  DB.save();
+  tg.haptic('light');
+  renderOrder(); updateMainButton();
+}
+
+// Отправить на кухню: все новые позиции становятся «на кухне»
+function sendToKitchen() {
+  const t = DB.getTable(activeTableId);
+  if (!t) return;
+  let n = 0;
+  t.order.forEach((it) => { if ((it.status || 'new') === 'new') { it.status = 'sent'; n += 1; } });
+  if (!n) return;
+  DB.save();
+  tg.haptic('success');
+  toast('Отправлено на кухню');
   renderOrder(); updateMainButton();
 }
 
@@ -728,7 +806,7 @@ function repeatOrder(order) {
   const apply = () => {
     target.order = order.items.map((it) => ({
       id: uid(), emoji: it.emoji, name: it.name, qty: it.qty,
-      price: it.price, weight: it.weight || '', mods: [...(it.mods || [])], note: it.note || '',
+      price: it.price, weight: it.weight || '', mods: [...(it.mods || [])], note: it.note || '', status: 'new',
     }));
     activeTableId = target.id;
     DB.save();
@@ -815,6 +893,10 @@ function openDishModal(sectionId = null, dishId = null) {
   $('#taskWeight').value = isEdit ? (dish.weight || '') : '';
   $('#taskNewSection').value = '';
   $('#dishDeleteBtn').hidden = !isEdit;
+  // Кнопка стоп-листа (только при редактировании)
+  const stopBtn = $('#dishStopBtn');
+  stopBtn.hidden = !isEdit;
+  if (isEdit) stopBtn.textContent = dish.stop ? '✅ Вернуть в меню' : '⛔ В стоп-лист';
 
   $('#taskSection').innerHTML = DB.state.menu.sections.map((s) =>
     `<option value="${s.id}" ${(isEdit && s.id === sectionId) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')
@@ -875,6 +957,19 @@ function bindDishModal() {
       tg.haptic('warning');
       renderMenu();
     });
+  });
+
+  // Стоп-лист: пометить блюдо как «нет в наличии» / вернуть в меню
+  $('#dishStopBtn').addEventListener('click', () => {
+    if (!dishEdit) return;
+    const sec = DB.state.menu.sections.find((s) => s.id === dishEdit.sectionId);
+    const dish = sec.items.find((i) => i.id === dishEdit.dishId);
+    dish.stop = !dish.stop;
+    DB.save();
+    tg.haptic('warning');
+    closeModal('#modalTask');
+    renderMenu();
+    toast(dish.stop ? 'Блюдо в стоп-листе' : 'Блюдо снова в меню');
   });
 }
 
@@ -956,9 +1051,14 @@ function updateCartFab() {
 
 function updateMainButton() {
   const onOrder = nav.current().screen === 'order';
-  const n = activeOrder().length;
-  if (onOrder && n) tg.mainButton('Закрыть стол · оплачено', completeOrder);
-  else tg.hideMainButton();
+  const order = activeOrder();
+  if (onOrder && order.length) {
+    const newCount = order.reduce((n, it) => n + ((it.status || 'new') === 'new' ? it.qty : 0), 0);
+    if (newCount > 0) tg.mainButton(`Отправить на кухню · ${newCount}`, sendToKitchen);
+    else tg.mainButton('Закрыть стол · оплачено', completeOrder);
+  } else {
+    tg.hideMainButton();
+  }
   updateCartFab();
 }
 
@@ -1031,6 +1131,7 @@ function init() {
     nav.go('menu', { title: t ? `${t.emoji} ${t.name}` : 'Меню' });
   });
   $('#cartCompleteBtn').addEventListener('click', completeOrder);
+  $('#sendKitchenBtn').addEventListener('click', sendToKitchen);
 
   $('#settingsBtn').addEventListener('click', openSettings);
 

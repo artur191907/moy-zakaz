@@ -60,7 +60,8 @@
         <strong id="cartTotal">—</strong>
       </div>
       <button class="btn btn--ghost" id="addMoreBtn" hidden>＋ Добавить ещё блюда</button>
-      <!-- Запасная кнопка завершения (когда нет нативной MainButton Telegram) -->
+      <!-- Запасные кнопки для режима браузера (в Telegram действия в MainButton) -->
+      <button class="btn btn--accent" id="sendKitchenBtn" hidden>🍳 Отправить на кухню</button>
       <button class="btn btn--accent" id="cartCompleteBtn" hidden>Закрыть стол · оплачено</button>
     </section>
 
@@ -182,6 +183,7 @@
       <select class="field__input" id="taskSection"></select>
       <input class="field__input" id="taskNewSection" placeholder="…или название нового раздела" />
 
+      <button class="btn btn--ghost" id="dishStopBtn" hidden>⛔ В стоп-лист</button>
       <div class="modal__row">
         <button class="btn btn--ghost btn--danger" id="dishDeleteBtn" hidden>Удалить блюдо</button>
         <button class="btn btn--accent" id="taskSaveBtn">Сохранить</button>

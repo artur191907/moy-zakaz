@@ -650,3 +650,44 @@ select.field__input { appearance: none; }
   color: var(--text); width: 26px; height: 26px; border-radius: 50%;
   font-size: 13px; cursor: pointer; display: grid; place-items: center;
 }
+
+/* ============ Статусы блюд, степпер в строке, стоп-лист ============ */
+
+/* Статус-пилюля в строке заказа */
+.status-pill {
+  border: none; cursor: pointer; font-family: inherit;
+  font-size: 12px; font-weight: 700;
+  border-radius: 999px; padding: 3px 9px;
+  color: #fff;
+}
+.status-pill[disabled] { cursor: default; }
+.status-pill.is-new    { background: #e0533d; }   /* ещё не отправлено */
+.status-pill.is-sent   { background: #4c6ef5; }   /* на кухне */
+.status-pill.is-served { background: #2fb56e; }   /* подано */
+
+/* Степпер количества прямо в строке заказа */
+.line-stepper {
+  flex: none; display: flex; align-items: center;
+  background: var(--secondary-bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.line-stepper__btn {
+  width: 34px; height: 34px;
+  border: none; background: none; color: var(--text);
+  font-size: 18px; line-height: 1; cursor: pointer;
+}
+.line-stepper__btn:active { background: var(--line); }
+.line-stepper__val { min-width: 26px; text-align: center; font-weight: 700; font-size: 15px; }
+
+/* Метка неотправленных позиций на плитке стола */
+.tile__count.is-new { background: #e0533d; }
+
+/* Стоп-лист: затемнённое блюдо и значок «Стоп» */
+.dish.is-stopped { opacity: .5; }
+.dish.is-stopped .dish__name { text-decoration: line-through; }
+.dish__stop {
+  flex: none; font-size: 12px; font-weight: 700;
+  color: #fff; background: var(--destructive);
+  border-radius: 999px; padding: 3px 10px;
+}
