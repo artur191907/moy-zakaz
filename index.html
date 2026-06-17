@@ -23,13 +23,19 @@
     <!-- ЭКРАН 1: СТОЛЫ -->
     <section class="screen is-active" id="screen-tables" data-screen="tables">
       <div class="tables-toolbar">
+        <div class="seg" id="floorSeg">
+          <button class="seg__btn is-active" data-floor="1">1 этаж</button>
+          <button class="seg__btn" data-floor="2">2 этаж</button>
+        </div>
         <div class="seg" id="viewSeg">
           <button class="seg__btn is-active" data-view="grid">▦ Сетка</button>
           <button class="seg__btn" data-view="plan">🗺 План</button>
         </div>
+      </div>
+      <div class="tables-toolbar">
+        <p class="screen__lead" id="tablesLead">Выберите стол, чтобы открыть его заказ</p>
         <button class="chip-btn" id="reorderBtn">↕ Порядок</button>
       </div>
-      <p class="screen__lead" id="tablesLead">Выберите стол, чтобы открыть его заказ</p>
       <div class="tiles" id="tilesGrid"><!-- столы / план из JS --></div>
     </section>
 

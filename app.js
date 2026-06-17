@@ -90,6 +90,16 @@ const tg = {
 /* ----------------------------- ДАННЫЕ ----------------------------- */
 const STORE_KEY = 'myorder_db_v2';   // v2 — ресторанная модель
 
+// Этажная раскладка столов: 1 этаж — 6, 2 этаж — 8 (позиции расставляются вручную на плане)
+function seedTables() {
+  const colors = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8'];
+  const mk = (name, floor, i) => ({ id: uid(), name, emoji: '🍽️', color: colors[i % colors.length], floor, order: [] });
+  const arr = [];
+  for (let i = 1; i <= 6; i++) arr.push(mk('Стол ' + i, 1, i - 1));
+  for (let i = 7; i <= 14; i++) arr.push(mk('Стол ' + i, 2, i - 1));
+  return arr;
+}
+
 const DB = {
   state: null,
 
@@ -98,11 +108,22 @@ const DB = {
       const raw = localStorage.getItem(STORE_KEY);
       if (raw) {
         const data = JSON.parse(raw);
-        if (data && data.version === 3) { this.state = data; return; }
+        if (data && data.version === 3) { this.state = data; this.migrate(); return; }
       }
     } catch (e) {}
     this.state = this.seed();
     this.save();
+  },
+  // Мягкая миграция: сохраняем меню/историю/настройки, обновляем только то, чего не хватает
+  migrate() {
+    const s = this.state;
+    if (!s.settings) s.settings = { currency: '₽' };
+    // Переход на этажи: один раз заменяем набор столов на этажную раскладку
+    if (!s.tablesFloorMigrated) {
+      s.tables = seedTables();
+      s.tablesFloorMigrated = true;
+      this.save();
+    }
   },
   save() {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(this.state)); }
@@ -301,18 +322,9 @@ const DB = {
           ]),
         ],
       },
-      // СТОЛЫ зала (можно переставлять, добавлять, удалять)
-      tables: [
-        tbl('Стол 1', '1️⃣', 'c2'),
-        tbl('Стол 2', '2️⃣', 'c2'),
-        tbl('Стол 3', '3️⃣', 'c3'),
-        tbl('Стол 4', '4️⃣', 'c3'),
-        tbl('Стол 5', '5️⃣', 'c1'),
-        tbl('Стол 6', '6️⃣', 'c1'),
-        tbl('Бар 1', '🍶', 'c5'),
-        tbl('Бар 2', '🍶', 'c5'),
-        tbl('VIP', '⭐', 'c4'),
-      ],
+      // СТОЛЫ зала по этажам (1 этаж — 6, 2 этаж — 8). Позиции на плане расставляются вручную.
+      tables: seedTables(),
+      tablesFloorMigrated: true,
       history: [],
     };
   },
@@ -352,6 +364,8 @@ const SCREENS = {
 let activeTableId = null;   // стол, с которым сейчас работаем
 let reorderMode = false;    // включён ли режим перестановки столов
 let menuQuery = '';         // текущий поисковый запрос в меню
+let currentFloor = 1;       // выбранный этаж (1 или 2)
+let statsPeriod = 'today';  // период статистики: today | week | month | all
 
 const nav = {
   stack: [{ screen: 'tables', params: {} }],
@@ -405,14 +419,17 @@ function tablesView() { return DB.state.settings.tablesView || 'grid'; }
 function renderTables() {
   const grid = $('#tilesGrid');
   const view = tablesView();
-  // Переключатель вида
+  // Переключатели вида и этажа
   $$('#viewSeg .seg__btn').forEach((b) => b.classList.toggle('is-active', b.dataset.view === view));
+  $$('#floorSeg .seg__btn').forEach((b) => b.classList.toggle('is-active', +b.dataset.floor === currentFloor));
+
+  const onFloor = DB.state.tables.filter((t) => (t.floor || 1) === currentFloor);
 
   if (view === 'plan') {
     reorderMode = false;
     $('#reorderBtn').hidden = true;
     $('#tablesLead').textContent = 'Двигайте столы по плану, тап — открыть, долгое нажатие — изменить';
-    renderFloor(grid);
+    renderFloor(grid, onFloor);
     return;
   }
 
@@ -423,13 +440,13 @@ function renderTables() {
     : 'Выберите стол, чтобы открыть его заказ';
   $('#reorderBtn').textContent = reorderMode ? '✓ Готово' : '↕ Порядок';
 
-  if (reorderMode) { renderReorder(grid); return; }
+  if (reorderMode) { renderReorder(grid, onFloor); return; }
 
   grid.className = 'tiles';
   const sumOf = (t) => t.order.reduce((s, it) => s + it.price * it.qty, 0);
   const cntOf = (t) => t.order.reduce((n, it) => n + it.qty, 0);
 
-  grid.innerHTML = DB.state.tables.map((t) => {
+  grid.innerHTML = onFloor.map((t) => {
     const sum = sumOf(t), cnt = cntOf(t);
     const busy = cnt > 0;
     const hasNew = t.order.some((it) => (it.status || 'new') === 'new');
@@ -465,12 +482,12 @@ function openTable(id) {
   else nav.go('menu', { title: `${t.emoji} ${t.name}` });
 }
 
-// ПЛАН ЗАЛА: столы как перетаскиваемые узлы на «карте»
-function renderFloor(container) {
+// ПЛАН ЗАЛА: столы текущего этажа как перетаскиваемые узлы на «карте»
+function renderFloor(container, tables) {
   container.className = 'floor';
-  // Авторасстановка координат для столов без позиции
+  // Авторасстановка координат для столов без позиции (в пределах этажа)
   let changed = false;
-  DB.state.tables.forEach((t, i) => {
+  tables.forEach((t, i) => {
     if (t.x == null || t.y == null) {
       const cols = 3, c = i % cols, r = Math.floor(i / cols);
       t.x = 6 + c * 31; t.y = 4 + r * 20; changed = true;
@@ -478,7 +495,7 @@ function renderFloor(container) {
   });
   if (changed) DB.save();
 
-  container.innerHTML = DB.state.tables.map((t) => {
+  container.innerHTML = tables.map((t) => {
     const cnt = t.order.reduce((n, it) => n + it.qty, 0);
     const busy = cnt > 0;
     const sum = t.order.reduce((s, it) => s + it.price * it.qty, 0);
@@ -536,28 +553,31 @@ function bindFloorDrag(container) {
   });
 }
 
-// Режим перестановки столов
-function renderReorder(grid) {
+// Режим перестановки столов (в пределах текущего этажа)
+function renderReorder(grid, tables) {
   grid.className = '';
-  grid.innerHTML = DB.state.tables.map((t, i) => `
+  grid.innerHTML = tables.map((t, i) => `
     <div class="reorder-row" style="--accent:var(--${t.color})">
       <span class="reorder-row__emoji">${esc(t.emoji)}</span>
       <span class="reorder-row__name">${esc(t.name)}</span>
       <span class="reorder-row__btns">
         <button data-up="${t.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
-        <button data-down="${t.id}" ${i === DB.state.tables.length - 1 ? 'disabled' : ''}>↓</button>
+        <button data-down="${t.id}" ${i === tables.length - 1 ? 'disabled' : ''}>↓</button>
       </span>
     </div>`).join('');
 
+  // Перестановка: меняем местами в общем массиве с ближайшим столом того же этажа
   const move = (id, dir) => {
     const arr = DB.state.tables;
     const i = arr.findIndex((t) => t.id === id);
-    const j = i + dir;
+    if (i < 0) return;
+    let j = i + dir;
+    while (j >= 0 && j < arr.length && (arr[j].floor || 1) !== (arr[i].floor || 1)) j += dir;
     if (j < 0 || j >= arr.length) return;
     [arr[i], arr[j]] = [arr[j], arr[i]];
     DB.save();
     tg.haptic('light');
-    renderReorder(grid);
+    renderTables();
   };
   $$('[data-up]', grid).forEach((b) => b.addEventListener('click', () => move(b.dataset.up, -1)));
   $$('[data-down]', grid).forEach((b) => b.addEventListener('click', () => move(b.dataset.down, +1)));
@@ -599,13 +619,17 @@ function renderMenuList() {
     return;
   }
 
-  box.innerHTML = groups.map(({ s, items }) => `
+  box.innerHTML = groups.map(({ s, items }) => {
+    // Сворачивание работает только без поиска
+    const collapsed = !q && isSectionCollapsed(s.id);
+    return `
     <div class="menu__section">
-      <div class="menu__section-head">
+      <button class="menu__section-head" data-sec-toggle="${s.id}" ${q ? 'disabled' : ''}>
+        <span class="menu__section-chev">${q ? '' : (collapsed ? '▸' : '▾')}</span>
         <span class="menu__section-title">${esc(s.name)}</span>
-        <span class="menu__section-line"></span>
-      </div>
-      ${items.map((it) => `
+        ${collapsed ? `<span class="menu__section-count">${items.length}</span>` : '<span class="menu__section-line"></span>'}
+      </button>
+      ${collapsed ? '' : items.map((it) => `
         <button class="dish ${it.stop ? 'is-stopped' : ''}" data-dish="${it.id}" data-section="${s.id}">
           <span class="dish__emoji">${esc(it.emoji)}</span>
           <span class="dish__body">
@@ -614,7 +638,15 @@ function renderMenuList() {
           </span>
           ${it.stop ? '<span class="dish__stop">Стоп</span>' : '<span class="dish__plus">＋</span>'}
         </button>`).join('')}
-    </div>`).join('');
+    </div>`;
+  }).join('');
+
+  // Сворачивание/разворачивание разделов
+  $$('[data-sec-toggle]', box).forEach((h) => h.addEventListener('click', () => {
+    toggleSection(h.dataset.secToggle);
+    tg.haptic('light');
+    renderMenuList();
+  }));
 
   $$('.dish[data-dish]', box).forEach((el) => {
     const sec = DB.state.menu.sections.find((s) => s.id === el.dataset.section);
@@ -628,6 +660,20 @@ function renderMenuList() {
   });
 
   updateCartFab();
+}
+
+// Свёрнутые разделы меню (хранятся в настройках)
+function isSectionCollapsed(id) {
+  const list = DB.state.settings.menuCollapsed || [];
+  return list.includes(id);
+}
+function toggleSection(id) {
+  const s = DB.state.settings;
+  if (!s.menuCollapsed) s.menuCollapsed = [];
+  const i = s.menuCollapsed.indexOf(id);
+  if (i >= 0) s.menuCollapsed.splice(i, 1);
+  else s.menuCollapsed.push(id);
+  DB.save();
 }
 
 /* ------------------------- МОДИФИКАТОРЫ БЛЮДА ------------------------- */
@@ -931,7 +977,7 @@ function openTransfer() {
     const busy = x.order.length;
     return `<button class="transfer-row" data-target="${x.id}">
         <span class="transfer-row__emoji" style="background:var(--${x.color})">${esc(x.emoji)}</span>
-        <span class="transfer-row__name">${esc(x.name)}</span>
+        <span class="transfer-row__name">${esc(x.name)} <span class="transfer-row__floor">${x.floor || 1} эт.</span></span>
         <span class="transfer-row__state">${busy ? 'занят · объединить' : 'свободен'}</span>
       </button>`;
   }).join('');
@@ -1062,59 +1108,109 @@ function updateOrderTimer() {
 }
 
 /* ----------------------------- СТАТИСТИКА ----------------------------- */
+// Принадлежит ли дата выбранному периоду
+function inPeriod(date, period) {
+  const now = new Date();
+  const x = new Date(date);
+  if (period === 'all') return true;
+  if (period === 'today') {
+    return x.getFullYear() === now.getFullYear() && x.getMonth() === now.getMonth() && x.getDate() === now.getDate();
+  }
+  const days = period === 'week' ? 7 : 30;
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1));
+  return x >= start;
+}
+
+// Столбцы графика для периода: today → по часам, иначе → по дням
+function statsBuckets(period) {
+  const h = DB.state.history;
+  const now = new Date();
+  if (period === 'today') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const map = {};
+    h.forEach((o) => { const d = new Date(o.date); if (d >= start) { const hr = d.getHours(); map[hr] = (map[hr] || 0) + o.total; } });
+    const hours = Object.keys(map).map(Number).sort((a, b) => a - b);
+    if (!hours.length) return [];
+    const buckets = [];
+    for (let hr = hours[0]; hr <= hours[hours.length - 1]; hr++) buckets.push({ label: hr + ':00', value: map[hr] || 0 });
+    return buckets;
+  }
+  const days = period === 'week' ? 7 : period === 'month' ? 30 : 14;
+  const buckets = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    const next = new Date(d); next.setDate(d.getDate() + 1);
+    const val = h.filter((o) => { const x = new Date(o.date); return x >= d && x < next; }).reduce((s, o) => s + o.total, 0);
+    buckets.push({ label: `${d.getDate()}.${String(d.getMonth() + 1).padStart(2, '0')}`, value: val });
+  }
+  return buckets;
+}
+
+const PERIODS = [['today', 'День'], ['week', 'Неделя'], ['month', 'Месяц'], ['all', 'Всё']];
+
 function renderStats() {
   const h = DB.state.history;
   const box = $('#statsContent');
   const emptyEl = $('#statsEmpty');
-  if (!h.length) { box.innerHTML = ''; emptyEl.hidden = false; return; }
+
+  // Переключатель периода (всегда показываем)
+  const seg = `<div class="seg seg--full" id="periodSeg">${PERIODS.map(([k, label]) =>
+    `<button class="seg__btn ${k === statsPeriod ? 'is-active' : ''}" data-period="${k}">${label}</button>`).join('')}</div>`;
+
+  if (!h.length) { box.innerHTML = seg; emptyEl.hidden = false; bindPeriodSeg(box); return; }
   emptyEl.hidden = true;
 
-  const now = new Date();
-  const isToday = (d) => {
-    const x = new Date(d);
-    return x.getFullYear() === now.getFullYear() && x.getMonth() === now.getMonth() && x.getDate() === now.getDate();
-  };
-  const calc = (arr) => {
-    const rev = arr.reduce((s, o) => s + o.total, 0);
-    const checks = arr.length;
-    const guests = arr.reduce((s, o) => s + (o.guests || 0), 0);
-    return { rev, checks, avg: checks ? rev / checks : 0, guests };
-  };
-  const all = calc(h);
-  const today = calc(h.filter((o) => isToday(o.date)));
+  const arr = h.filter((o) => inPeriod(o.date, statsPeriod));
+  const rev = arr.reduce((s, o) => s + o.total, 0);
+  const checks = arr.length;
+  const guests = arr.reduce((s, o) => s + (o.guests || 0), 0);
+  const avg = checks ? rev / checks : 0;
 
-  // Топ блюд по количеству (за всё время)
+  // Топ блюд за период
   const map = {};
-  h.forEach((o) => o.items.forEach((it) => { map[it.name] = (map[it.name] || 0) + it.qty; }));
+  arr.forEach((o) => o.items.forEach((it) => { map[it.name] = (map[it.name] || 0) + it.qty; }));
   const top = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
-  // Выручка по способам оплаты
+  // Оплата за период
   const pay = { cash: 0, card: 0 };
-  h.forEach((o) => { if (o.payment === 'cash') pay.cash += o.total; else if (o.payment === 'card') pay.card += o.total; });
+  arr.forEach((o) => { if (o.payment === 'cash') pay.cash += o.total; else if (o.payment === 'card') pay.card += o.total; });
 
-  const block = (title, d) => `
+  // График
+  const buckets = statsBuckets(statsPeriod);
+  const max = Math.max(1, ...buckets.map((b) => b.value));
+  const showVals = buckets.length <= 10;
+  const chart = buckets.length ? `
     <div class="stats-block">
-      <div class="stats-block__title">${title}</div>
-      <div class="stat-grid">
-        <div class="stat-card"><div class="stat-card__value">${formatPrice(d.rev)}</div><div class="stat-card__label">Выручка</div></div>
-        <div class="stat-card"><div class="stat-card__value">${d.checks}</div><div class="stat-card__label">Закрытых столов</div></div>
-        <div class="stat-card"><div class="stat-card__value">${formatPrice(d.avg)}</div><div class="stat-card__label">Средний чек</div></div>
-        <div class="stat-card"><div class="stat-card__value">${d.guests}</div><div class="stat-card__label">Гостей</div></div>
+      <div class="stats-block__title">${statsPeriod === 'today' ? 'Выручка по часам' : 'Выручка по дням'}</div>
+      <div class="chart">
+        ${buckets.map((b) => `
+          <div class="chart__col">
+            ${showVals && b.value ? `<div class="chart__val">${Math.round(b.value / 1000 * 10) / 10}к</div>` : ''}
+            <div class="chart__bar" style="height:${Math.max(2, Math.round(b.value / max * 100))}%"></div>
+            <div class="chart__label">${b.label}</div>
+          </div>`).join('')}
       </div>
-    </div>`;
+    </div>` : '';
 
-  box.innerHTML =
-    block('Сегодня', today) +
-    block('За всё время', all) +
+  box.innerHTML = seg +
     `<div class="stats-block">
-      <div class="stats-block__title">Оплата (за всё время)</div>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-card__value">${formatPrice(rev)}</div><div class="stat-card__label">Выручка</div></div>
+        <div class="stat-card"><div class="stat-card__value">${checks}</div><div class="stat-card__label">Закрытых столов</div></div>
+        <div class="stat-card"><div class="stat-card__value">${formatPrice(avg)}</div><div class="stat-card__label">Средний чек</div></div>
+        <div class="stat-card"><div class="stat-card__value">${guests}</div><div class="stat-card__label">Гостей</div></div>
+      </div>
+    </div>` +
+    chart +
+    `<div class="stats-block">
+      <div class="stats-block__title">Оплата</div>
       <div class="stat-grid">
         <div class="stat-card"><div class="stat-card__value">${formatPrice(pay.cash)}</div><div class="stat-card__label">💵 Наличные</div></div>
         <div class="stat-card"><div class="stat-card__value">${formatPrice(pay.card)}</div><div class="stat-card__label">💳 Карта</div></div>
       </div>
     </div>` +
-    `<div class="stats-block">
-      <div class="stats-block__title">Топ-5 блюд</div>
+    (top.length ? `<div class="stats-block">
+      <div class="stats-block__title">Топ блюд</div>
       <div class="stat-list">
         ${top.map(([name, qty], i) => `
           <div class="stat-list__row">
@@ -1123,7 +1219,17 @@ function renderStats() {
             <span class="stat-list__qty">${qty} шт</span>
           </div>`).join('')}
       </div>
-    </div>`;
+    </div>` : '');
+
+  bindPeriodSeg(box);
+}
+
+function bindPeriodSeg(box) {
+  $$('#periodSeg .seg__btn', box).forEach((b) => b.addEventListener('click', () => {
+    statsPeriod = b.dataset.period;
+    tg.haptic('light');
+    renderStats();
+  }));
 }
 
 /* ------------------------- МОДАЛКА СТОЛА ------------------------- */
@@ -1158,7 +1264,7 @@ function bindTableModal() {
       const t = DB.getTable(tableEditId);
       Object.assign(t, { emoji, name, color: pickedColor });
     } else {
-      DB.state.tables.push({ id: uid(), name, emoji, color: pickedColor, order: [] });
+      DB.state.tables.push({ id: uid(), name, emoji, color: pickedColor, floor: currentFloor, order: [] });
     }
     DB.save();
     closeModal('#modalCategory');
@@ -1412,6 +1518,15 @@ function init() {
     renderTables();
   }));
 
+  // Переключатель этажа
+  $$('#floorSeg .seg__btn').forEach((b) => b.addEventListener('click', () => {
+    currentFloor = +b.dataset.floor;
+    DB.state.settings.tablesFloor = currentFloor;
+    DB.save();
+    reorderMode = false;
+    renderTables();
+  }));
+
   // Действия со столом
   $('#transferBtn').addEventListener('click', openTransfer);
   $('#billBtn').addEventListener('click', toggleBill);
@@ -1460,6 +1575,9 @@ function init() {
   bindDishModal();
   bindSettings();
   bindModalBackdrops();
+
+  // Текущий этаж из настроек — до первой отрисовки
+  currentFloor = DB.state.settings.tablesFloor || 1;
 
   nav.apply();
 
