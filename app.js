@@ -400,13 +400,28 @@ function activeOrder() {
 }
 
 /* --------------------------- ЭКРАН СТОЛОВ --------------------------- */
+function tablesView() { return DB.state.settings.tablesView || 'grid'; }
+
 function renderTables() {
   const grid = $('#tilesGrid');
+  const view = tablesView();
+  // Переключатель вида
+  $$('#viewSeg .seg__btn').forEach((b) => b.classList.toggle('is-active', b.dataset.view === view));
+
+  if (view === 'plan') {
+    reorderMode = false;
+    $('#reorderBtn').hidden = true;
+    $('#tablesLead').textContent = 'Двигайте столы по плану, тап — открыть, долгое нажатие — изменить';
+    renderFloor(grid);
+    return;
+  }
+
+  $('#reorderBtn').hidden = false;
   $('#reorderBtn').classList.toggle('is-active', reorderMode);
   $('#tablesLead').textContent = reorderMode
     ? 'Двигайте столы стрелками, затем нажмите «Готово»'
     : 'Выберите стол, чтобы открыть его заказ';
-  $('#reorderBtn').textContent = reorderMode ? '✓ Готово' : '↕ Расставить';
+  $('#reorderBtn').textContent = reorderMode ? '✓ Готово' : '↕ Порядок';
 
   if (reorderMode) { renderReorder(grid); return; }
 
@@ -419,8 +434,9 @@ function renderTables() {
     const busy = cnt > 0;
     const hasNew = t.order.some((it) => (it.status || 'new') === 'new');
     return `
-      <button class="tile ${busy ? 'is-busy' : 'is-empty'}" style="--tile:var(--${t.color})" data-table="${t.id}">
+      <button class="tile ${busy ? 'is-busy' : 'is-empty'} ${t.billRequested ? 'is-bill' : ''}" style="--tile:var(--${t.color})" data-table="${t.id}">
         ${busy ? `<span class="tile__count ${hasNew ? 'is-new' : ''}">${cnt}</span>` : ''}
+        ${t.billRequested ? '<span class="tile__bill">💳</span>' : ''}
         <span class="tile__emoji">${esc(t.emoji)}</span>
         <span class="tile__name">${esc(t.name)}</span>
         ${busy ? `<span class="tile__sum">${formatPrice(sum)}</span>` : ''}
@@ -433,18 +449,91 @@ function renderTables() {
 
   $$('.tile[data-table]', grid).forEach((tile) => {
     const id = tile.dataset.table;
-    tile.addEventListener('click', () => {
-      tg.haptic('light');
-      activeTableId = id;
-      const t = DB.getTable(id);
-      // Если за столом уже есть заказ — открываем счёт, иначе сразу меню
-      if (t.order.length) nav.go('order', { title: `${t.emoji} ${t.name}` });
-      else nav.go('menu', { title: `${t.emoji} ${t.name}` });
-    });
+    tile.addEventListener('click', () => openTable(id));
     attachLongPress(tile, () => openTableModal(id));
   });
 
   $('#addTableTile').addEventListener('click', () => openTableModal(null));
+}
+
+// Открыть стол: заказ (если есть) или меню
+function openTable(id) {
+  tg.haptic('light');
+  activeTableId = id;
+  const t = DB.getTable(id);
+  if (t.order.length) nav.go('order', { title: `${t.emoji} ${t.name}` });
+  else nav.go('menu', { title: `${t.emoji} ${t.name}` });
+}
+
+// ПЛАН ЗАЛА: столы как перетаскиваемые узлы на «карте»
+function renderFloor(container) {
+  container.className = 'floor';
+  // Авторасстановка координат для столов без позиции
+  let changed = false;
+  DB.state.tables.forEach((t, i) => {
+    if (t.x == null || t.y == null) {
+      const cols = 3, c = i % cols, r = Math.floor(i / cols);
+      t.x = 6 + c * 31; t.y = 4 + r * 20; changed = true;
+    }
+  });
+  if (changed) DB.save();
+
+  container.innerHTML = DB.state.tables.map((t) => {
+    const cnt = t.order.reduce((n, it) => n + it.qty, 0);
+    const busy = cnt > 0;
+    const sum = t.order.reduce((s, it) => s + it.price * it.qty, 0);
+    return `
+      <button class="floor-table ${busy ? 'is-busy' : ''} ${t.billRequested ? 'is-bill' : ''}"
+              style="--tile:var(--${t.color}); left:${t.x}%; top:${t.y}%;" data-table="${t.id}">
+        ${t.billRequested ? '<span class="floor-table__bill">💳</span>' : ''}
+        <span class="floor-table__emoji">${esc(t.emoji)}</span>
+        <span class="floor-table__name">${esc(t.name)}</span>
+        ${busy ? `<span class="floor-table__sum">${formatPrice(sum)}</span>` : ''}
+      </button>`;
+  }).join('');
+
+  bindFloorDrag(container);
+}
+
+function bindFloorDrag(container) {
+  $$('.floor-table', container).forEach((node) => {
+    const id = node.dataset.table;
+    let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false, moved = false, lpTimer = null, longPressed = false, rect = null;
+
+    node.addEventListener('pointerdown', (e) => {
+      dragging = true; moved = false; longPressed = false;
+      rect = container.getBoundingClientRect();
+      sx = e.clientX; sy = e.clientY;
+      const t = DB.getTable(id); ox = t.x; oy = t.y;
+      try { node.setPointerCapture(e.pointerId); } catch (err) {}
+      lpTimer = setTimeout(() => { if (!moved) { longPressed = true; tg.haptic('medium'); openTableModal(id); } }, 500);
+    });
+    node.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) { moved = true; clearTimeout(lpTimer); }
+      let nx = ox + dx / rect.width * 100;
+      let ny = oy + dy / rect.height * 100;
+      nx = Math.max(0, Math.min(80, nx));
+      ny = Math.max(0, Math.min(86, ny));
+      node.style.left = nx + '%'; node.style.top = ny + '%';
+      node.dataset.nx = nx; node.dataset.ny = ny;
+    });
+    const end = () => {
+      if (!dragging) return;
+      dragging = false;
+      clearTimeout(lpTimer);
+      if (longPressed) return;            // было долгое нажатие → редактирование, не открываем
+      if (moved) {                        // перетаскивание → сохраняем позицию
+        const t = DB.getTable(id);
+        if (t && node.dataset.nx != null) { t.x = parseFloat(node.dataset.nx); t.y = parseFloat(node.dataset.ny); DB.save(); }
+      } else {                            // тап → открыть стол
+        openTable(id);
+      }
+    };
+    node.addEventListener('pointerup', end);
+    node.addEventListener('pointercancel', end);
+  });
 }
 
 // Режим перестановки столов
@@ -546,7 +635,7 @@ let modState = null;
 
 function openModifiers(item) {
   if (!activeTableId) { toast('Сначала выберите стол'); return; }
-  modState = { mode: 'add', emoji: item.emoji, name: item.name, qty: 1, price: item.price, weight: item.weight || '', mods: [], note: '' };
+  modState = { mode: 'add', emoji: item.emoji, name: item.name, qty: 1, price: item.price, weight: item.weight || '', mods: [], note: '', course: 1 };
   fillModifiers();
   openModal('#modalModifiers');
 }
@@ -554,7 +643,7 @@ function openModifiersEdit(lineId) {
   const line = activeOrder().find((i) => i.id === lineId);
   if (!line) return;
   modState = { mode: 'edit', lineId, emoji: line.emoji, name: line.name, qty: line.qty,
-               price: line.price, weight: line.weight || '', mods: [...(line.mods || [])], note: line.note || '' };
+               price: line.price, weight: line.weight || '', mods: [...(line.mods || [])], note: line.note || '', course: line.course || 1 };
   fillModifiers();
   openModal('#modalModifiers');
 }
@@ -574,10 +663,17 @@ function fillModifiers() {
     else modState.mods.push(m);
     c.classList.toggle('is-active');
   }));
+  // Очередность подачи
+  $$('#courseSegments .segment').forEach((s) => s.classList.toggle('is-active', +s.dataset.course === (modState.course || 1)));
 }
 function bindModifiers() {
   $('#qtyMinus').addEventListener('click', () => { modState.qty = Math.max(1, modState.qty - 1); $('#qtyVal').textContent = modState.qty; });
   $('#qtyPlus').addEventListener('click', () => { modState.qty += 1; $('#qtyVal').textContent = modState.qty; });
+  $$('#courseSegments .segment').forEach((s) => s.addEventListener('click', () => {
+    modState.course = +s.dataset.course;
+    $$('#courseSegments .segment').forEach((x) => x.classList.remove('is-active'));
+    s.classList.add('is-active');
+  }));
   $('#addToCartBtn').addEventListener('click', commitModifiers);
 }
 function commitModifiers() {
@@ -592,7 +688,8 @@ function commitModifiers() {
       if (!t.guests) t.guests = 1;
     }
     t.order.push({ id: uid(), emoji: modState.emoji, name: modState.name, qty: modState.qty,
-                   price: modState.price, weight: modState.weight, mods: modState.mods, note: modState.note, status: 'new' });
+                   price: modState.price, weight: modState.weight, mods: modState.mods, note: modState.note,
+                   status: 'new', course: modState.course || 1 });
     DB.save();
     closeModal('#modalModifiers');
     tg.haptic('success');
@@ -600,7 +697,7 @@ function commitModifiers() {
     updateCartFab(); updateMainButton();
   } else {
     const line = t.order.find((i) => i.id === modState.lineId);
-    if (line) Object.assign(line, { qty: modState.qty, price: modState.price, mods: modState.mods, note: modState.note });
+    if (line) Object.assign(line, { qty: modState.qty, price: modState.price, mods: modState.mods, note: modState.note, course: modState.course || 1 });
     DB.save();
     closeModal('#modalModifiers');
     tg.haptic('light');
@@ -624,6 +721,7 @@ function renderOrder() {
     empty.hidden = false; summary.hidden = true; addMore.hidden = true;
     completeBtn.hidden = true; sendBtn.hidden = true;
     $('#orderMeta').hidden = true;
+    $('#orderActions').hidden = true;
     return;
   }
   empty.hidden = true; summary.hidden = false; addMore.hidden = false;
@@ -658,11 +756,27 @@ function renderOrder() {
   $('#guestMinus').addEventListener('click', () => setGuests(-1));
   $('#guestPlus').addEventListener('click', () => setGuests(+1));
 
-  list.innerHTML = order.map((it) => ticketRowHTML(it, true)).join('');
+  // Список позиций. Если есть несколько подач — группируем с заголовками.
+  const courses = [...new Set(order.map((it) => it.course || 1))].sort((a, b) => a - b);
+  if (courses.length > 1) {
+    list.innerHTML = courses.map((c) =>
+      `<div class="course-head">🍽 Подача ${c}</div>` +
+      order.filter((it) => (it.course || 1) === c).map((it) => ticketRowHTML(it, true)).join('')
+    ).join('');
+  } else {
+    list.innerHTML = order.map((it) => ticketRowHTML(it, true)).join('');
+  }
   bindTicketRows(list, true);
 
   const total = order.reduce((s, it) => s + it.price * it.qty, 0);
   $('#cartTotal').textContent = formatPrice(total);
+
+  // Действия со столом: перенос и «гость просит счёт»
+  const actions = $('#orderActions');
+  actions.hidden = false;
+  const billBtn = $('#billBtn');
+  billBtn.textContent = t.billRequested ? '✓ Счёт запрошен' : '💳 Просит счёт';
+  billBtn.classList.toggle('is-active', !!t.billRequested);
 
   // Нижние кнопки. В Telegram действия дублируются нативной MainButton (см. updateMainButton).
   const newCount = order.reduce((n, it) => n + ((it.status || 'new') === 'new' ? it.qty : 0), 0);
@@ -796,9 +910,60 @@ function sendToKitchen() {
   renderOrder(); updateMainButton();
 }
 
-// Нажатие «Закрыть стол» → окно выбора способа оплаты
-function completeOrder() {
+// Отметка «гость просит счёт» — переключатель на столе
+function toggleBill() {
   const t = DB.getTable(activeTableId);
+  if (!t || !t.order.length) return;
+  t.billRequested = !t.billRequested;
+  DB.save();
+  tg.haptic('warning');
+  renderOrder();
+}
+
+// Перенос заказа: открыть список столов-приёмников
+function openTransfer() {
+  const t = DB.getTable(activeTableId);
+  if (!t || !t.order.length) return;
+  const box = $('#transferList');
+  const others = DB.state.tables.filter((x) => x.id !== activeTableId);
+  if (!others.length) { toast('Нет других столов'); return; }
+  box.innerHTML = others.map((x) => {
+    const busy = x.order.length;
+    return `<button class="transfer-row" data-target="${x.id}">
+        <span class="transfer-row__emoji" style="background:var(--${x.color})">${esc(x.emoji)}</span>
+        <span class="transfer-row__name">${esc(x.name)}</span>
+        <span class="transfer-row__state">${busy ? 'занят · объединить' : 'свободен'}</span>
+      </button>`;
+  }).join('');
+  $$('.transfer-row', box).forEach((b) => b.addEventListener('click', () => transferTo(b.dataset.target)));
+  openModal('#modalTransfer');
+}
+
+function transferTo(targetId) {
+  const src = DB.getTable(activeTableId);
+  const dst = DB.getTable(targetId);
+  if (!src || !dst) return;
+  const doMove = () => {
+    dst.order = dst.order.concat(src.order);
+    dst.guests = (dst.guests || 0) + (src.guests || 0) || 1;
+    dst.openedAt = dst.openedAt ? Math.min(dst.openedAt, src.openedAt || dst.openedAt) : (src.openedAt || Date.now());
+    dst.billRequested = dst.billRequested || src.billRequested;
+    src.order = []; src.guests = 0; src.openedAt = null; src.billRequested = false;
+    activeTableId = dst.id;
+    DB.save();
+    tg.haptic('success');
+    closeModal('#modalTransfer');
+    toast(`Перенесено на «${dst.name}»`);
+    nav.switchTop('tables');
+    nav.go('order', { title: `${dst.emoji} ${dst.name}` });
+  };
+  if (dst.order.length) {
+    tg.confirm(`За столом «${dst.name}» уже есть заказ. Объединить заказы?`, (ok) => { if (ok) doMove(); });
+  } else doMove();
+}
+
+// Нажатие «Закрыть стол» → окно выбора способа оплаты
+function completeOrder() {  const t = DB.getTable(activeTableId);
   if (!t || !t.order.length) return;
   $('#payTotal').textContent = formatPrice(t.order.reduce((s, it) => s + it.price * it.qty, 0));
   openModal('#modalPay');
@@ -823,6 +988,7 @@ function closeOrderWith(method) {
   t.order = [];
   t.guests = 0;
   t.openedAt = null;
+  t.billRequested = false;
   DB.save();
   tg.haptic('success');
   closeModal('#modalPay');
@@ -1237,6 +1403,18 @@ function init() {
     reorderMode = !reorderMode;
     nav.apply();
   });
+
+  // Переключатель вида столов: сетка / план
+  $$('#viewSeg .seg__btn').forEach((b) => b.addEventListener('click', () => {
+    DB.state.settings.tablesView = b.dataset.view;
+    DB.save();
+    reorderMode = false;
+    renderTables();
+  }));
+
+  // Действия со столом
+  $('#transferBtn').addEventListener('click', openTransfer);
+  $('#billBtn').addEventListener('click', toggleBill);
 
   // Поиск по меню: фильтруем список по мере ввода (фокус не теряется,
   // т.к. перерисовывается только список блюд, а не сама строка поиска)

@@ -23,10 +23,14 @@
     <!-- ЭКРАН 1: СТОЛЫ -->
     <section class="screen is-active" id="screen-tables" data-screen="tables">
       <div class="tables-toolbar">
-        <p class="screen__lead" id="tablesLead">Выберите стол, чтобы открыть его заказ</p>
-        <button class="chip-btn" id="reorderBtn">↕ Расставить</button>
+        <div class="seg" id="viewSeg">
+          <button class="seg__btn is-active" data-view="grid">▦ Сетка</button>
+          <button class="seg__btn" data-view="plan">🗺 План</button>
+        </div>
+        <button class="chip-btn" id="reorderBtn">↕ Порядок</button>
       </div>
-      <div class="tiles" id="tilesGrid"><!-- столы из JS --></div>
+      <p class="screen__lead" id="tablesLead">Выберите стол, чтобы открыть его заказ</p>
+      <div class="tiles" id="tilesGrid"><!-- столы / план из JS --></div>
     </section>
 
     <!-- ЭКРАН 2: МЕНЮ (общее меню заведения) -->
@@ -59,6 +63,10 @@
       <div class="ticket__summary" id="cartSummary" hidden>
         <span>Итого</span>
         <strong id="cartTotal">—</strong>
+      </div>
+      <div class="order-actions" id="orderActions" hidden>
+        <button class="btn btn--ghost" id="transferBtn">⇄ Перенести</button>
+        <button class="btn btn--ghost" id="billBtn">💳 Просит счёт</button>
       </div>
       <button class="btn btn--ghost" id="addMoreBtn" hidden>＋ Добавить ещё блюда</button>
       <!-- Запасные кнопки для режима браузера (в Telegram действия в MainButton) -->
@@ -129,6 +137,13 @@
 
       <label class="field__label">Модификаторы</label>
       <div class="chips" id="modChips"><!-- чипы из JS --></div>
+
+      <label class="field__label">Подача (очередность)</label>
+      <div class="segments" id="courseSegments">
+        <button class="segment is-active" data-course="1">1-я</button>
+        <button class="segment" data-course="2">2-я</button>
+        <button class="segment" data-course="3">3-я</button>
+      </div>
 
       <label class="field__label" id="costLabel">Цена за порцию, ₽</label>
       <input class="field__input" id="costInput" type="number" inputmode="numeric" min="0" step="10" value="0" />
@@ -201,6 +216,17 @@
         <button class="btn btn--ghost btn--danger" id="dishDeleteBtn" hidden>Удалить блюдо</button>
         <button class="btn btn--accent" id="taskSaveBtn">Сохранить</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Перенос заказа на другой стол -->
+  <div class="modal" id="modalTransfer" hidden>
+    <div class="modal__backdrop" data-close></div>
+    <div class="modal__sheet">
+      <div class="modal__grip"></div>
+      <h2 class="modal__title">Перенести заказ</h2>
+      <p class="modal__hint" style="margin-top:0">Выберите стол, куда перенести. Если там уже есть заказ — предложим объединить.</p>
+      <div class="transfer-list" id="transferList"></div>
     </div>
   </div>
 

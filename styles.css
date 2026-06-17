@@ -752,3 +752,79 @@ select.field__input { appearance: none; }
 }
 .stat-list__name { flex: 1; font-weight: 600; font-size: 14px; }
 .stat-list__qty { flex: none; color: var(--hint); font-size: 13px; font-weight: 600; }
+
+/* ============ План зала, перенос, подачи, отметка счёта ============ */
+
+/* Сегмент-переключатель (Сетка / План) */
+.seg { display: inline-flex; background: var(--secondary-bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
+.seg__btn {
+  border: none; background: none; color: var(--text);
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  padding: 7px 14px; border-radius: 999px; cursor: pointer;
+}
+.seg__btn.is-active { background: var(--button); color: var(--button-text); }
+
+/* План зала: холст с абсолютно расположенными столами */
+.floor {
+  position: relative;
+  width: 100%;
+  height: 64vh;
+  min-height: 360px;
+  background:
+    linear-gradient(var(--line) 1px, transparent 1px) 0 0 / 100% 24px,
+    linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 24px 100%,
+    var(--section-bg);
+  background-blend-mode: normal;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  touch-action: none;          /* перетаскивание не должно скроллить страницу */
+}
+.floor-table {
+  position: absolute;
+  width: 18%; min-width: 76px; max-width: 110px;
+  aspect-ratio: 1 / 1;
+  border: none; border-radius: 14px;
+  color: #fff; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  padding: 6px;
+  background: linear-gradient(150deg, var(--tile), color-mix(in srgb, var(--tile) 78%, #000));
+  box-shadow: var(--shadow-sm);
+  touch-action: none; user-select: none;
+}
+.floor-table.is-busy { box-shadow: 0 0 0 2px rgba(255,255,255,0.45) inset, var(--shadow); }
+.floor-table.is-bill { outline: 3px solid #f0b429; outline-offset: -1px; }
+.floor-table__emoji { font-size: 24px; line-height: 1; }
+.floor-table__name { font-size: 12px; font-weight: 700; text-align: center; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.floor-table__sum { font-size: 11px; font-weight: 700; background: rgba(0,0,0,.28); border-radius: 999px; padding: 1px 7px; }
+.floor-table__bill { position: absolute; top: 4px; right: 5px; font-size: 13px; }
+
+/* Бейдж «просит счёт» на плитке сетки */
+.tile__bill { position: absolute; top: 12px; left: 12px; font-size: 16px; }
+.tile.is-bill { outline: 3px solid #f0b429; outline-offset: -3px; }
+
+/* Заголовок подачи в заказе */
+.course-head {
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--hint);
+  margin: 10px 2px 8px;
+}
+.course-head:first-child { margin-top: 0; }
+
+/* Действия со столом (перенос / счёт) */
+.order-actions { display: flex; gap: 10px; margin-top: 12px; }
+.order-actions .btn { margin-top: 0; }
+#billBtn.is-active { background: #f0b429; color: #1a1a1a; border-color: #f0b429; }
+
+/* Список столов в окне переноса */
+.transfer-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.transfer-row {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; text-align: left;
+  background: var(--secondary-bg); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 10px 12px; cursor: pointer; color: var(--text);
+  font-family: inherit;
+}
+.transfer-row__emoji { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; font-size: 20px; color: #fff; flex: none; }
+.transfer-row__name { flex: 1; font-weight: 600; }
+.transfer-row__state { font-size: 12.5px; color: var(--hint); }
