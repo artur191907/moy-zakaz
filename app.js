@@ -91,7 +91,7 @@ const DB = {
       const raw = localStorage.getItem(STORE_KEY);
       if (raw) {
         const data = JSON.parse(raw);
-        if (data && data.version === 2) { this.state = data; return; }
+        if (data && data.version === 3) { this.state = data; return; }
       }
     } catch (e) {}
     this.state = this.seed();
@@ -106,69 +106,191 @@ const DB = {
   // Заводские данные: меню суши-бистро + столы
   seed() {
     // Фабрики
-    const dish = (emoji, name, price) => ({ id: uid(), emoji, name, price });
+    // dish(эмодзи, название, цена, граммовка)
+    const dish = (emoji, name, price, weight) => ({ id: uid(), emoji, name, price, weight });
     const sec  = (name, items) => ({ id: uid(), name, items });
     const tbl  = (name, emoji, color) => ({ id: uid(), name, emoji, color, order: [] });
 
     return {
-      version: 2,
+      version: 3,
       settings: { currency: '₽' },
-      // ОБЩЕЕ МЕНЮ ЗАВЕДЕНИЯ. Цены — реалистичные московские, легко правятся в приложении.
+      // РЕАЛЬНОЕ МЕНЮ «СУШИ БИСТРО» (по скриншотам Яндекс.Еды). Всё редактируется в приложении.
       menu: {
         sections: [
+          sec('Авторские роллы', [
+            dish('🍣', 'Тамаки Сан', 1090, '320 г'),
+            dish('🍣', 'Фудзи', 1090, '345 г'),
+            dish('🐉', 'Шёлковый Дракон', 1090, '345 г'),
+            dish('🍣', 'Икура Сан', 1190, '265 г'),
+            dish('🍣', 'Шан цзун', 999, '327 г'),
+            dish('🍣', 'Лю кан', 999, '380 г'),
+            dish('🍣', 'Райден', 999, '354 г'),
+            dish('🍣', 'Саб-зиро', 999, '362 г'),
+            dish('🦂', 'Скорпион', 999, '367 г'),
+            dish('🌋', 'Вулкан', 1090, '284 г'),
+            dish('🍣', 'Якудза', 999, '315 г'),
+            dish('🍤', 'Фудзи эби', 999, '345 г'),
+          ]),
+          sec('Рамён', [
+            dish('🍜', 'Рамен Том Ям', 555, '700 г'),
+            dish('🍜', 'Рамен мисо морепродукты', 555, '700 г'),
+            dish('🍜', 'Рамен с курицей', 555, '700 г'),
+            dish('🍜', 'Рамен с говядиной', 555, '700 г'),
+            dish('🍜', 'Рамен с креветками', 555, '700 г'),
+            dish('🍜', 'Рамен с лососем', 555, '700 г'),
+            dish('🍜', 'Рамен сырный', 555, '700 г'),
+            dish('🥟', 'Рамэн Гёдза с говядиной', 555, '700 г'),
+          ]),
           sec('Сеты', [
-            dish('🍱', 'Сет «Филадельфия»', 1290),
-            dish('🍱', 'Сет «Токио»', 1690),
-            dish('🍱', 'Сет «Запечённый»', 1590),
-            dish('🍱', 'Сет «Большой»', 2490),
+            dish('🍱', 'Корпоратив L', 9500, '4,6 кг'),
+            dish('🍱', 'Корпоратив M', 6400, '2,3 кг'),
+            dish('🍱', 'Корпоратив S', 3200, '1,15 кг'),
+            dish('❤️', 'Romantic', 3200, '1,12 кг'),
+            dish('🍱', 'Феймос', 2450, '869 г'),
+            dish('🍱', 'Филадельфия', 2750, '885 г'),
+            dish('🍱', 'Гурман', 3200, '1,09 кг'),
+            dish('🌶️', 'Хот', 3100, '1,01 кг'),
+            dish('🍱', 'Фирма', 4300, '1,5 кг'),
+            dish('🍱', 'Мажор', 5300, '1,65 кг'),
+            dish('🍱', 'Мини', 2000, '700 г'),
+            dish('🍱', 'Сет Куба', 2320, '975 г'),
           ]),
-          sec('Роллы классические', [
-            dish('🍣', 'Филадельфия', 520),
-            dish('🍣', 'Калифорния', 480),
-            dish('🍣', 'Канада с угрём', 560),
-            dish('🌶️', 'Спайси лосось', 440),
-            dish('🥑', 'Овощной', 320),
-            dish('🍣', 'Унаги маки', 390),
+          sec('Салаты', [
+            dish('🥗', 'Цезарь с креветками', 650, '310 г'),
+            dish('🥗', 'Салат Азия с баклажанами', 555, '350 г'),
+            dish('🥗', 'Салат с говядиной', 790, '330 г'),
+            dish('🥗', 'Салат с креветками и манго', 670, '140 г'),
+            dish('🥗', 'Цезарь с курицей', 590, '310 г'),
+            dish('🥗', 'Цезарь с лососем', 650, '310 г'),
+            dish('🥗', 'Азиатский салат с говядиной', 750, '140 г'),
+            dish('🥗', 'Салат с морепродуктами', 950, '450 г'),
           ]),
-          sec('Запечённые роллы', [
-            dish('🔥', 'Запечённый с лососем', 460),
-            dish('🔥', 'Запечённый с угрём', 540),
-            dish('🔥', 'Запечённый краб', 420),
+          sec('Закуски', [
+            dish('🍟', 'Картофель фри', 250, '180 г'),
+            dish('🦪', 'Мидии в соусе Блю Чиз', 790, '600 г'),
+            dish('🧀', 'Сырные палочки', 390, '140 г'),
+            dish('🍣', 'Сашими Лосось', 650, '80 г'),
+            dish('🍣', 'Сашими Тунец', 650, '90 г'),
+            dish('🥩', 'Тартар из говядины', 690, '150 г'),
+            dish('🥟', 'Гёдза', 555, '120 г'),
+            dish('🍆', 'Баклажан темпура', 490, '180 г'),
+            dish('🍤', 'Креветки в миндале', 555, '150 г'),
+            dish('🍤', 'Креветки темпура', 555, '150 г'),
+            dish('🍤', 'Креветки в сухарях панко', 555, '150 г'),
+            dish('🍣', 'Тартар лосось', 777, '150 г'),
+            dish('🦪', 'Мидии запеченные спайси краб', 555, '120 г'),
+            dish('🦪', 'Мидии запеченные с соусом лава', 555, '120 г'),
+            dish('🦪', 'Мидии запеченные под сырным соусом', 555, '120 г'),
           ]),
-          sec('Суши и нигири', [
-            dish('🍣', 'Нигири лосось', 150),
-            dish('🍣', 'Нигири угорь', 220),
-            dish('🍣', 'Нигири тунец', 190),
-            dish('🍤', 'Нигири креветка', 170),
-            dish('🌶️', 'Гункан спайси', 180),
-          ]),
-          sec('Горячее', [
-            dish('🍜', 'Лапша вок с курицей', 420),
-            dish('🍚', 'Рис вок с морепродуктами', 490),
-            dish('🍛', 'Кацу-карри с курицей', 520),
-            dish('🍤', 'Темпура из креветок', 480),
+          sec('Поке', [
+            dish('🥗', 'Поке Веган', 750, '323 г'),
+            dish('🍚', 'Поке Лосось', 750, '365 г'),
+            dish('🍚', 'Поке креветки панко', 750, '365 г'),
+            dish('🍚', 'Поке гурман', 790, '365 г'),
+            dish('🍚', 'Поке Креветка', 750, '365 г'),
           ]),
           sec('Супы', [
-            dish('🍲', 'Том ям с креветками', 540),
-            dish('🍲', 'Мисо-суп', 250),
-            dish('🍜', 'Рамен', 520),
+            dish('🍲', 'Кукси с говядиной', 555, '680 г'),
+            dish('🍲', 'Том ям с морепродуктами', 730, '555 г'),
+            dish('🍲', 'Том ям с креветками', 690, '520 г'),
+            dish('🍲', 'Том ям с курицей', 670, '520 г'),
           ]),
-          sec('Салаты и закуски', [
-            dish('🥗', 'Салат чука', 290),
-            dish('🥗', 'Поке с тунцом', 520),
-            dish('🫛', 'Эдамаме', 290),
-            dish('🥟', 'Гёдза с курицей', 360),
+          sec('Суши', [
+            dish('🍣', 'Гункан Лосось', 200, '40 г'),
+            dish('🍣', 'Гункан Креветка', 200, '40 г'),
+            dish('🍣', 'Гункан Угорь', 200, '40 г'),
+            dish('🍙', 'Онигири темпура креветка', 490, '210 г'),
+            dish('🍙', 'Онигири классик лосось', 333, '150 г'),
+            dish('🍙', 'Онигири темпура лосось', 490, '210 г'),
+            dish('🍤', 'Суши с креветкой', 200, '30 г'),
+            dish('🍣', 'Суши с лососем', 200, '35 г'),
+            dish('🍙', 'Онигири классик Тунец', 333, '150 г'),
+            dish('🍙', 'Онигири темпура угорь', 490, '210 г'),
+            dish('🍙', 'Онигири классик угорь', 333, '150 г'),
+            dish('🍙', 'Онигири классик креветка', 333, '150 г'),
+            dish('🍣', 'Суши с лососем и авокадо', 200, '32 г'),
+          ]),
+          sec('Роллы', [
+            dish('🥑', 'Мини-ролл с авокадо', 420, '140 г'),
+            dish('🥒', 'Мини-ролл с огурцом', 350, '165 г'),
+            dish('🍣', 'Мини-ролл с лососем', 490, '140 г'),
+            dish('🍤', 'Мини-ролл с креветкой', 480, '140 г'),
+            dish('🍣', 'Мини ролл с тунцом', 480, '150 г'),
+            dish('🍣', 'Мини-ролл с угрём', 490, '145 г'),
+            dish('🍣', 'Канада', 820, '300 г'),
+            dish('🍣', 'Кога', 750, '293 г'),
+            dish('🔥', 'Абури лосось', 777, '305 г'),
+            dish('🍣', 'Майами', 830, '291 г'),
+            dish('🍣', 'Фирменный', 850, '295 г'),
+            dish('🍤', 'Эби ролл', 790, '275 г'),
+            dish('🍣', 'Делюкс', 990, '271 г'),
+            dish('🍣', 'Масаго', 820, '269 г'),
+            dish('🍣', 'Томаго', 690, '270 г'),
+            dish('🍣', 'Шатен', 840, '253 г'),
+            dish('🍣', 'Тартар с угрем', 820, '278 г'),
+            dish('🐉', 'Зеленый дракон', 830, '258 г'),
+            dish('🍣', 'Филадельфия классик', 850, '300 г'),
+            dish('🍣', 'Филадельфия Лайт', 890, '300 г'),
+            dish('🥑', 'Филадельфия с авокадо', 890, '300 г'),
+            dish('🍣', 'Калифорния', 770, '283 г'),
+            dish('🍣', 'Калифорния с лососем', 830, '265 г'),
+            dish('🍣', 'Блек Джек', 840, '280 г'),
+            dish('🍣', 'Сегун', 770, '295 г'),
+            dish('🍣', 'Сенсей', 760, '283 г'),
+          ]),
+          sec('Горячие роллы', [
+            dish('🔥', 'Император', 750, '245 г'),
+            dish('🔥', 'Сливочный унаги', 750, '250 г'),
+            dish('🔥', 'Калифорния темпура', 750, '250 г'),
+            dish('🍤', 'Эби темпура', 750, '245 г'),
+            dish('🔥', 'Самурай', 750, '280 г'),
+            dish('🌶️', 'Спайси-темпура', 750, '255 г'),
+          ]),
+          sec('Запечённые роллы', [
+            dish('🔥', 'Унаги Делишес', 750, '237 г'),
+            dish('🔥', 'Хитатцу', 750, '230 г'),
+            dish('🦀', 'Тёплый с крабом', 750, '268 г'),
+            dish('🧀', 'Чиз Салмон', 750, '240 г'),
+            dish('🔥', 'Тёплый с лососем', 750, '265 г'),
+            dish('🍤', 'Тёплый с креветкой', 750, '265 г'),
+          ]),
+          sec('Новинка', [
+            dish('🍔', 'Суши-бургер Лосось', 555, '265 г'),
+            dish('🍔', 'Суши-бургер Тунец', 555, '265 г'),
+            dish('🍔', 'Суши-бургер креветка-угорь', 555, '265 г'),
+            dish('🌭', 'Ролл-дог лосось-угорь', 690, '290 г'),
+            dish('🌭', 'Ролл-дог лосось-краб', 690, '290 г'),
+            dish('🌭', 'Ролл-дог креветка', 690, '290 г'),
+          ]),
+          sec('Кондитерские изделия', [
+            dish('🍰', 'Малибу', 450, '200 г'),
+            dish('🍰', 'Минари', 450, '200 г'),
           ]),
           sec('Напитки', [
-            dish('🍵', 'Зелёный чай', 250),
-            dish('🥤', 'Кола', 180),
-            dish('🍋', 'Домашний лимонад', 290),
-            dish('🍺', 'Пиво Asahi', 450),
+            dish('🥤', 'Coca-Cola', 350, '330 мл'),
+            dish('🥤', 'Coca-Cola Zero', 350, '330 мл'),
+            dish('🥤', 'Sprite', 350, '330 мл'),
+            dish('🥤', 'Fanta', 350, '330 мл'),
+            dish('🍺', 'Пивной напиток Corona Cero б/а', 450, '330 мл'),
+            dish('🍺', 'Пиво б/а светлое Stella Artois', 350, '440 мл'),
+            dish('🍺', 'Пиво б/а Hoegaarden', 390, '440 мл'),
+            dish('💧', 'Вода Легенда Байкала газ.', 350, '500 мл'),
+            dish('💧', 'Вода Легенда Байкала без газа', 350, '500 мл'),
           ]),
-          sec('Десерты', [
-            dish('🍡', 'Моти', 290),
-            dish('🍰', 'Чизкейк', 350),
-            dish('🍨', 'Мороженое', 250),
+          sec('Холодные напитки', [
+            dish('🧃', 'Свежевыжатый fresh', 500, '300 мл'),
+            dish('🍹', 'Sunrise', 555, '500 мл'),
+            dish('🍹', 'Sunset', 555, '500 мл'),
+            dish('🍹', 'Grinch', 555, '500 мл'),
+            dish('🍹', 'Mommy', 555, '500 мл'),
+            dish('💧', 'Water Passion', 555, '500 мл'),
+            dish('🍸', 'Mojito', 470, '500 мл'),
+            dish('🥤', 'Смузи Pink', 530, '330 мл'),
+            dish('🫐', 'Смузи Blueberry', 530, '300 мл'),
+            dish('🍓', 'Смузи Love', 530, '300 мл'),
+            dish('🥭', 'Смузи Jungle', 530, '300 мл'),
+            dish('🍍', 'Смузи Tropic', 530, '300 мл'),
+            dish('🥝', 'Смузи Kiwi-mint', 530, '300 мл'),
           ]),
         ],
       },
@@ -376,7 +498,7 @@ function renderMenuList() {
           <span class="dish__emoji">${esc(it.emoji)}</span>
           <span class="dish__body">
             <span class="dish__name">${esc(it.name)}</span>
-            <span class="dish__cost">${formatPrice(it.price)}</span>
+            <span class="dish__cost">${formatPrice(it.price)}${it.weight ? ' · ' + esc(it.weight) : ''}</span>
           </span>
           <span class="dish__plus">＋</span>
         </button>`).join('')}
@@ -398,7 +520,7 @@ let modState = null;
 
 function openModifiers(item) {
   if (!activeTableId) { toast('Сначала выберите стол'); return; }
-  modState = { mode: 'add', emoji: item.emoji, name: item.name, qty: 1, price: item.price, mods: [], note: '' };
+  modState = { mode: 'add', emoji: item.emoji, name: item.name, qty: 1, price: item.price, weight: item.weight || '', mods: [], note: '' };
   fillModifiers();
   openModal('#modalModifiers');
 }
@@ -406,7 +528,7 @@ function openModifiersEdit(lineId) {
   const line = activeOrder().find((i) => i.id === lineId);
   if (!line) return;
   modState = { mode: 'edit', lineId, emoji: line.emoji, name: line.name, qty: line.qty,
-               price: line.price, mods: [...(line.mods || [])], note: line.note || '' };
+               price: line.price, weight: line.weight || '', mods: [...(line.mods || [])], note: line.note || '' };
   fillModifiers();
   openModal('#modalModifiers');
 }
@@ -440,7 +562,7 @@ function commitModifiers() {
 
   if (modState.mode === 'add') {
     t.order.push({ id: uid(), emoji: modState.emoji, name: modState.name, qty: modState.qty,
-                   price: modState.price, mods: modState.mods, note: modState.note });
+                   price: modState.price, weight: modState.weight, mods: modState.mods, note: modState.note });
     DB.save();
     closeModal('#modalModifiers');
     tg.haptic('success');
@@ -491,7 +613,7 @@ function ticketRowHTML(it, withDelete = true) {
         <div class="ticket-row__body">
           <div class="ticket-row__name">${esc(it.name)}</div>
           <div class="ticket-row__meta">
-            <span class="tag">${formatPrice(it.price)}</span>${mods}
+            <span class="tag">${formatPrice(it.price)}</span>${it.weight ? `<span class="tag">${esc(it.weight)}</span>` : ''}${mods}
           </div>
           ${note}
         </div>
@@ -606,7 +728,7 @@ function repeatOrder(order) {
   const apply = () => {
     target.order = order.items.map((it) => ({
       id: uid(), emoji: it.emoji, name: it.name, qty: it.qty,
-      price: it.price, mods: [...(it.mods || [])], note: it.note || '',
+      price: it.price, weight: it.weight || '', mods: [...(it.mods || [])], note: it.note || '',
     }));
     activeTableId = target.id;
     DB.save();
@@ -690,6 +812,7 @@ function openDishModal(sectionId = null, dishId = null) {
   $('#taskEmoji').value = isEdit ? dish.emoji : '🍣';
   $('#taskName').value = isEdit ? dish.name : '';
   $('#taskCost').value = isEdit ? dish.price : 0;
+  $('#taskWeight').value = isEdit ? (dish.weight || '') : '';
   $('#taskNewSection').value = '';
   $('#dishDeleteBtn').hidden = !isEdit;
 
@@ -704,13 +827,14 @@ function bindDishModal() {
     const emoji = $('#taskEmoji').value.trim() || '🍣';
     const name = $('#taskName').value.trim();
     const price = Math.max(0, parseInt($('#taskCost').value, 10) || 0);
+    const weight = $('#taskWeight').value.trim();
     if (!name) { toast('Введите название блюда'); return; }
 
     if (dishEdit) {
       // Редактирование существующего блюда (с возможным переносом в другой раздел)
       const fromSec = DB.state.menu.sections.find((s) => s.id === dishEdit.sectionId);
       const dish = fromSec.items.find((i) => i.id === dishEdit.dishId);
-      Object.assign(dish, { emoji, name, price });
+      Object.assign(dish, { emoji, name, price, weight });
       const newSecName = $('#taskNewSection').value.trim();
       const targetSecId = $('#taskSection').value;
       if (newSecName) {
@@ -732,7 +856,7 @@ function bindDishModal() {
         section = DB.state.menu.sections.find((s) => s.id === $('#taskSection').value);
         if (!section) { section = { id: uid(), name: 'Без раздела', items: [] }; DB.state.menu.sections.push(section); }
       }
-      section.items.push({ id: uid(), emoji, name, price });
+      section.items.push({ id: uid(), emoji, name, price, weight });
     }
     DB.save();
     closeModal('#modalTask');
