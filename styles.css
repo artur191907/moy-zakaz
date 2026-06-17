@@ -691,3 +691,64 @@ select.field__input { appearance: none; }
   color: #fff; background: var(--destructive);
   border-radius: 999px; padding: 3px 10px;
 }
+
+/* ============ Гости + таймер, оплата, статистика ============ */
+
+/* Панель гостей и таймера на экране заказа */
+.order-meta {
+  display: flex; gap: 10px; margin-bottom: 14px;
+}
+.order-meta__item {
+  flex: 1;
+  background: var(--section-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.order-meta__label { font-size: 13px; color: var(--hint); font-weight: 600; }
+.order-meta__item--timer { justify-content: space-between; }
+.order-meta__timer { font-size: 16px; font-weight: 700; }
+
+/* Окно оплаты */
+.pay-total {
+  display: flex; justify-content: space-between; align-items: center;
+  background: var(--secondary-bg); border-radius: var(--radius-sm);
+  padding: 14px 16px; margin: 6px 0 4px; font-size: 15px; color: var(--hint);
+}
+.pay-total strong { font-size: 20px; color: var(--text); }
+#payCash, #payCard { margin-top: 0; }
+
+/* Статистика */
+.stats { display: flex; flex-direction: column; gap: 18px; }
+.stats-block__title {
+  font-size: 13px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--hint); margin: 0 2px 10px;
+}
+.stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.stat-card {
+  background: var(--section-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+}
+.stat-card__value { font-size: 20px; font-weight: 800; letter-spacing: -0.01em; }
+.stat-card__label { font-size: 12.5px; color: var(--hint); margin-top: 3px; }
+.stat-list {
+  background: var(--section-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.stat-list__row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border-bottom: 1px solid var(--line);
+}
+.stat-list__row:last-child { border-bottom: none; }
+.stat-list__rank {
+  flex: none; width: 24px; height: 24px; border-radius: 50%;
+  background: var(--secondary-bg); color: var(--text);
+  display: grid; place-items: center; font-size: 13px; font-weight: 700;
+}
+.stat-list__name { flex: 1; font-weight: 600; font-size: 14px; }
+.stat-list__qty { flex: none; color: var(--hint); font-size: 13px; font-weight: 600; }

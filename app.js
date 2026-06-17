@@ -326,6 +326,19 @@ function formatPrice(value) {
   return `${Math.round(value).toLocaleString('ru-RU')} ${DB.currency}`;
 }
 
+// Длительность в человекочитаемом виде: «5 мин», «1 ч 05 мин»
+function formatDuration(ms) {
+  if (!ms || ms < 0) return '—';
+  const min = Math.floor(ms / 60000);
+  if (min < 60) return `${min} мин`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${h} ч ${String(m).padStart(2, '0')} мин`;
+}
+
+// Подписи способов оплаты
+const PAYMENT = { cash: '💵 Наличные', card: '💳 Карта' };
+
 /* ----------------------------- НАВИГАЦИЯ ----------------------------- */
 const SCREENS = {
   'tables':         { title: 'Мой заказ', top: true },
@@ -333,6 +346,7 @@ const SCREENS = {
   'order':          { title: 'Заказ',     top: false },
   'history':        { title: 'История',   top: true },
   'history-detail': { title: 'Заказ',     top: false },
+  'stats':          { title: 'Статистика', top: true },
 };
 
 let activeTableId = null;   // стол, с которым сейчас работаем
@@ -376,6 +390,7 @@ function renderCurrent() {
   else if (screen === 'order') renderOrder();
   else if (screen === 'history') renderHistory();
   else if (screen === 'history-detail') renderHistoryDetail(params.orderId);
+  else if (screen === 'stats') renderStats();
 }
 
 // Текущий заказ активного стола (массив строк)
@@ -572,6 +587,10 @@ function commitModifiers() {
   if (!t) { closeModal('#modalModifiers'); return; }
 
   if (modState.mode === 'add') {
+    if (!t.order.length) {          // стол открывается этим первым блюдом
+      t.openedAt = Date.now();
+      if (!t.guests) t.guests = 1;
+    }
     t.order.push({ id: uid(), emoji: modState.emoji, name: modState.name, qty: modState.qty,
                    price: modState.price, weight: modState.weight, mods: modState.mods, note: modState.note, status: 'new' });
     DB.save();
@@ -592,6 +611,7 @@ function commitModifiers() {
 /* ------------------------- ЭКРАН ЗАКАЗА СТОЛА ------------------------- */
 function renderOrder() {
   const order = activeOrder();
+  const t = DB.getTable(activeTableId);
   const list = $('#ticketList');
   const empty = $('#cartEmpty');
   const summary = $('#cartSummary');
@@ -603,9 +623,40 @@ function renderOrder() {
     list.innerHTML = '';
     empty.hidden = false; summary.hidden = true; addMore.hidden = true;
     completeBtn.hidden = true; sendBtn.hidden = true;
+    $('#orderMeta').hidden = true;
     return;
   }
   empty.hidden = true; summary.hidden = false; addMore.hidden = false;
+
+  // Ленивая инициализация для заказов, созданных до этого обновления
+  if (!t.openedAt) { t.openedAt = Date.now(); DB.save(); }
+  if (!t.guests) { t.guests = 1; DB.save(); }
+
+  // Панель: гости (степпер) + таймер стола
+  const meta = $('#orderMeta');
+  meta.hidden = false;
+  meta.innerHTML = `
+    <div class="order-meta__item">
+      <span class="order-meta__label">👥 Гости</span>
+      <div class="line-stepper">
+        <button class="line-stepper__btn" id="guestMinus">−</button>
+        <span class="line-stepper__val" id="guestVal">${t.guests}</span>
+        <button class="line-stepper__btn" id="guestPlus">＋</button>
+      </div>
+    </div>
+    <div class="order-meta__item order-meta__item--timer">
+      <span class="order-meta__label">⏱ За столом</span>
+      <span class="order-meta__timer" id="orderTimer">${formatDuration(Date.now() - t.openedAt)}</span>
+    </div>`;
+  const setGuests = (d) => {
+    const tb = DB.getTable(activeTableId);
+    if (!tb) return;
+    tb.guests = Math.max(1, (tb.guests || 1) + d);
+    DB.save(); tg.haptic('light');
+    $('#guestVal').textContent = tb.guests;
+  };
+  $('#guestMinus').addEventListener('click', () => setGuests(-1));
+  $('#guestPlus').addEventListener('click', () => setGuests(+1));
 
   list.innerHTML = order.map((it) => ticketRowHTML(it, true)).join('');
   bindTicketRows(list, true);
@@ -745,8 +796,16 @@ function sendToKitchen() {
   renderOrder(); updateMainButton();
 }
 
-// Закрыть стол: заказ → в историю, стол освобождается
+// Нажатие «Закрыть стол» → окно выбора способа оплаты
 function completeOrder() {
+  const t = DB.getTable(activeTableId);
+  if (!t || !t.order.length) return;
+  $('#payTotal').textContent = formatPrice(t.order.reduce((s, it) => s + it.price * it.qty, 0));
+  openModal('#modalPay');
+}
+
+// Реальное закрытие стола с выбранным способом оплаты
+function closeOrderWith(method) {
   const t = DB.getTable(activeTableId);
   if (!t || !t.order.length) return;
   const total = t.order.reduce((s, it) => s + it.price * it.qty, 0);
@@ -757,11 +816,17 @@ function completeOrder() {
     items: t.order.map((it) => ({ ...it })),
     total,
     count: t.order.reduce((n, it) => n + it.qty, 0),
+    guests: t.guests || 1,
+    durationMs: t.openedAt ? (Date.now() - t.openedAt) : null,
+    payment: method,
   });
   t.order = [];
+  t.guests = 0;
+  t.openedAt = null;
   DB.save();
   tg.haptic('success');
-  toast('Стол закрыт, заказ в истории');
+  closeModal('#modalPay');
+  toast(method === 'cash' ? 'Оплата наличными · стол закрыт' : 'Оплата картой · стол закрыт');
   nav.switchTop('tables');
 }
 
@@ -808,6 +873,8 @@ function repeatOrder(order) {
       id: uid(), emoji: it.emoji, name: it.name, qty: it.qty,
       price: it.price, weight: it.weight || '', mods: [...(it.mods || [])], note: it.note || '', status: 'new',
     }));
+    target.openedAt = Date.now();
+    target.guests = order.guests || 1;
     activeTableId = target.id;
     DB.save();
     tg.haptic('success');
@@ -818,6 +885,79 @@ function repeatOrder(order) {
   if (target.order.length) {
     tg.confirm(`За столом «${target.name}» уже есть заказ. Заменить его повтором?`, (ok) => { if (ok) apply(); });
   } else apply();
+}
+
+// Живой таймер стола на экране заказа (обновляется по интервалу)
+function updateOrderTimer() {
+  if (nav.current().screen !== 'order') return;
+  const t = DB.getTable(activeTableId);
+  const el = $('#orderTimer');
+  if (el && t && t.openedAt) el.textContent = formatDuration(Date.now() - t.openedAt);
+}
+
+/* ----------------------------- СТАТИСТИКА ----------------------------- */
+function renderStats() {
+  const h = DB.state.history;
+  const box = $('#statsContent');
+  const emptyEl = $('#statsEmpty');
+  if (!h.length) { box.innerHTML = ''; emptyEl.hidden = false; return; }
+  emptyEl.hidden = true;
+
+  const now = new Date();
+  const isToday = (d) => {
+    const x = new Date(d);
+    return x.getFullYear() === now.getFullYear() && x.getMonth() === now.getMonth() && x.getDate() === now.getDate();
+  };
+  const calc = (arr) => {
+    const rev = arr.reduce((s, o) => s + o.total, 0);
+    const checks = arr.length;
+    const guests = arr.reduce((s, o) => s + (o.guests || 0), 0);
+    return { rev, checks, avg: checks ? rev / checks : 0, guests };
+  };
+  const all = calc(h);
+  const today = calc(h.filter((o) => isToday(o.date)));
+
+  // Топ блюд по количеству (за всё время)
+  const map = {};
+  h.forEach((o) => o.items.forEach((it) => { map[it.name] = (map[it.name] || 0) + it.qty; }));
+  const top = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  // Выручка по способам оплаты
+  const pay = { cash: 0, card: 0 };
+  h.forEach((o) => { if (o.payment === 'cash') pay.cash += o.total; else if (o.payment === 'card') pay.card += o.total; });
+
+  const block = (title, d) => `
+    <div class="stats-block">
+      <div class="stats-block__title">${title}</div>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-card__value">${formatPrice(d.rev)}</div><div class="stat-card__label">Выручка</div></div>
+        <div class="stat-card"><div class="stat-card__value">${d.checks}</div><div class="stat-card__label">Закрытых столов</div></div>
+        <div class="stat-card"><div class="stat-card__value">${formatPrice(d.avg)}</div><div class="stat-card__label">Средний чек</div></div>
+        <div class="stat-card"><div class="stat-card__value">${d.guests}</div><div class="stat-card__label">Гостей</div></div>
+      </div>
+    </div>`;
+
+  box.innerHTML =
+    block('Сегодня', today) +
+    block('За всё время', all) +
+    `<div class="stats-block">
+      <div class="stats-block__title">Оплата (за всё время)</div>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-card__value">${formatPrice(pay.cash)}</div><div class="stat-card__label">💵 Наличные</div></div>
+        <div class="stat-card"><div class="stat-card__value">${formatPrice(pay.card)}</div><div class="stat-card__label">💳 Карта</div></div>
+      </div>
+    </div>` +
+    `<div class="stats-block">
+      <div class="stats-block__title">Топ-5 блюд</div>
+      <div class="stat-list">
+        ${top.map(([name, qty], i) => `
+          <div class="stat-list__row">
+            <span class="stat-list__rank">${i + 1}</span>
+            <span class="stat-list__name">${esc(name)}</span>
+            <span class="stat-list__qty">${qty} шт</span>
+          </div>`).join('')}
+      </div>
+    </div>`;
 }
 
 /* ------------------------- МОДАЛКА СТОЛА ------------------------- */
@@ -1132,6 +1272,8 @@ function init() {
   });
   $('#cartCompleteBtn').addEventListener('click', completeOrder);
   $('#sendKitchenBtn').addEventListener('click', sendToKitchen);
+  $('#payCash').addEventListener('click', () => closeOrderWith('cash'));
+  $('#payCard').addEventListener('click', () => closeOrderWith('card'));
 
   $('#settingsBtn').addEventListener('click', openSettings);
 
@@ -1142,6 +1284,9 @@ function init() {
   bindModalBackdrops();
 
   nav.apply();
+
+  // Живой таймер открытого стола — раз в 30 секунд
+  setInterval(updateOrderTimer, 30000);
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
